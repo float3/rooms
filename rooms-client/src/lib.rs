@@ -42,8 +42,8 @@ fn tell_cargo(path: &Path) {
     println!("cargo::rerun-if-changed={}", path.display());
 }
 
-/// Compiles `<client>/main.ts` and appends `<client>/style.css` to the
-/// shared one.
+/// Compiles `<client>/main.ts` and appends any `<client>/*.css` to the
+/// shared stylesheet.
 ///
 /// The tool's TypeScript imports the shared half as `./rooms`; both are
 /// copied into one directory first so that the import resolves without the
@@ -53,6 +53,21 @@ fn tell_cargo(path: &Path) {
 /// path, and the build says so loudly when it is not, rather than quietly
 /// shipping TypeScript nobody has checked.
 pub fn bundle(client: &str) -> Built {
+    let (js, css) = gather(client, true);
+    Built {
+        js,
+        css: css.expect("the shared stylesheet was asked for"),
+    }
+}
+
+/// The same, for a tool with a look of its own. Petrov Day is a dark
+/// console with a siren on it and shares none of the stylesheet, but it
+/// shares every line of the TypeScript underneath.
+pub fn script(client: &str) -> PathBuf {
+    gather(client, false).0
+}
+
+fn gather(client: &str, styled: bool) -> (PathBuf, Option<PathBuf>) {
     let out = out_dir();
     let work = out.join("client");
     fs::create_dir_all(&work).expect("can write to OUT_DIR");
@@ -61,7 +76,11 @@ pub fn bundle(client: &str) -> Built {
 
     let client = PathBuf::from(client);
     tell_cargo(&client);
-    let mut css = ROOMS_CSS.to_string();
+    let mut css = if styled {
+        ROOMS_CSS.to_string()
+    } else {
+        String::new()
+    };
     for entry in fs::read_dir(&client).expect("the client directory is there") {
         let path = entry.expect("readable").path();
         tell_cargo(&path);
@@ -78,14 +97,17 @@ pub fn bundle(client: &str) -> Built {
         }
     }
 
-    let css_path = out.join("app.css");
-    fs::write(&css_path, css).expect("writes the stylesheet");
+    let written = styled.then(|| {
+        let path = out.join("app.css");
+        fs::write(&path, css).expect("writes the stylesheet");
+        path
+    });
 
     typecheck(&work);
     let js = out.join("app.js");
     compile(&work.join("main.ts"), &js);
 
-    Built { js, css: css_path }
+    (js, written)
 }
 
 /// Where a program is, looking the way each platform spells it. npm
