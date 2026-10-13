@@ -88,11 +88,42 @@ pub fn bundle(client: &str) -> Built {
     Built { js, css: css_path }
 }
 
-/// Runs a program, or says it is not there. Windows and Unix disagree
-/// about which error a missing program raises, so anything that would not
-/// start counts as missing.
+/// Where a program is, looking the way each platform spells it. npm
+/// installs esbuild and tsc as `.cmd` shims on Windows, and Windows will
+/// not start one of those as a program.
+fn which(program: &str) -> Option<PathBuf> {
+    let endings: &[&str] = if cfg!(windows) {
+        &[".exe", ".cmd", ".bat", ""]
+    } else {
+        &[""]
+    };
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| {
+        endings
+            .iter()
+            .map(|ending| dir.join(format!("{program}{ending}")))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+/// Runs a program, or says it is not there.
 fn run(program: &str, args: &[&str]) -> Option<std::process::Output> {
-    Command::new(program).args(args).output().ok()
+    let found = which(program)?;
+    let shim = found
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    let output = if shim {
+        // A shim is a batch script, so the shell has to run it.
+        Command::new("cmd")
+            .arg("/C")
+            .arg(&found)
+            .args(args)
+            .output()
+    } else {
+        Command::new(&found).args(args).output()
+    };
+    output.ok()
 }
 
 fn typecheck(work: &Path) {
