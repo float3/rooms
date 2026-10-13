@@ -96,6 +96,14 @@ impl<R: Room> Rooms<R> {
         rooms.iter().find_map(|(key, room)| f(key, room))
     }
 
+    /// Runs `f` over every room and saves. For the migration a tool does
+    /// at startup, when a room gained a field that older ones do not have.
+    pub async fn each(&self, f: impl FnMut(&mut R)) {
+        let mut rooms = self.rooms.lock().await;
+        rooms.values_mut().for_each(f);
+        self.save(&rooms);
+    }
+
     pub(crate) async fn lock(&self) -> Held<'_, R> {
         self.rooms.lock().await
     }
@@ -264,6 +272,26 @@ mod tests {
             .find(|k, r| (r.label == "player-token").then(|| k.to_string()))
             .await;
         assert_eq!(found, Some(key));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn every_room_can_be_walked_over_once_at_startup() {
+        let (rooms, path) = store("each");
+        for _ in 0..2 {
+            rooms
+                .create(|_| Toy {
+                    label: String::new(),
+                    seen: 0,
+                    ticks: 0,
+                })
+                .await;
+        }
+        rooms.each(|room| room.label = "migrated".into()).await;
+
+        let again: Arc<Rooms<Toy>> = Rooms::load(&path, 3);
+        let labels = again.find(|_, room| Some(room.label.clone())).await;
+        assert_eq!(labels.as_deref(), Some("migrated"), "and it was saved");
         let _ = fs::remove_file(&path);
     }
 
