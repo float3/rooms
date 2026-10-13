@@ -95,6 +95,14 @@ change rather than every room. A file that will not parse starts empty
 rather than stopping the tool from booting — the alternative is refusing
 to start because of an evening that is already over.
 
+## Under systemd
+
+`rooms::listen` takes the socket a systemd `.socket` unit passes in rather
+than binding one, which lets the service run with `PrivateNetwork = true`:
+an exploit in a party game cannot reach the internet, the other services
+on loopback, or anything else. Outside systemd it binds the address as
+usual, so `cargo run` is unchanged.
+
 ## Development
 
 ```sh

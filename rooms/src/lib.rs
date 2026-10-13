@@ -41,10 +41,12 @@
 
 pub mod http;
 pub mod key;
+mod listen;
 pub mod qr;
 mod store;
 mod stream;
 
+pub use listen::{listen, where_it_listens};
 pub use store::{Room, Rooms};
 pub use stream::{one, stream};
 

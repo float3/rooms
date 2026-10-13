@@ -4,7 +4,7 @@
 //! is long enough that guessing one is not worth anybody's afternoon, and
 //! made of characters that survive being read off a screen and typed in.
 
-use rand::{Rng, distr::Alphanumeric, rng};
+use rand::{RngExt, distr::Alphanumeric, rng};
 
 /// Long enough that there is nothing to gain by guessing, short enough to
 /// fit in a QR code that scans from across a room.
