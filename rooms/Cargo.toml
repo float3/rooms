@@ -3,7 +3,7 @@ name = "rooms"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-description = "A room other people join from their phones: keys, live updates, and somewhere to keep it."
+description = "A room other people join from their phones: keys, live updates and storage."
 
 [dependencies]
 axum = "0.8"

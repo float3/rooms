@@ -1,7 +1,7 @@
-//! The join link as something to point a phone at.
+//! The join link as a QR code.
 //!
-//! Handing out a 24-character key by reading it aloud does not work in a
-//! room with twenty people in it. Putting it on the wall does.
+//! Reading a 24-character key aloud to twenty people does not work. A code
+//! on the wall that they point a camera at does.
 
 use axum::{
     http::{StatusCode, header},
@@ -9,7 +9,7 @@ use axum::{
 };
 use qrcode::{QrCode, render::svg};
 
-/// A link that will not fit in a QR code anyone can scan.
+/// Longer than this and the code is too dense to scan across a room.
 pub const MAX_LEN: usize = 1000;
 
 /// The link as an SVG, sized by the viewer rather than by us.

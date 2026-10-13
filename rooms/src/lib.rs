@@ -1,15 +1,14 @@
-//! The part every one of these tools needs: a room other people join from
-//! their phones.
+//! A room that other people join from their phones.
 //!
-//! A host opens a room and gets back two keys — one to run it, one to hand
-//! out. Players join with the second, usually by scanning it off a screen.
-//! Everyone's phone holds an event stream open and sees the room change as
-//! it changes. The rooms live in one JSON file so a restart does not throw
-//! an evening away, and they are forgotten when nobody has looked at them
-//! for a while.
+//! The host gets two keys, one to run the room and one to hand out.
+//! Players join with the second, usually by scanning a QR code off a
+//! screen. Each phone keeps an event stream open and redraws when the room
+//! changes. Rooms are kept in one JSON file, so restarting the server does
+//! not lose what is in progress, and a room is deleted once nobody has
+//! opened it for a day.
 //!
-//! What a room *is* belongs to the tool. Implement [`Room`] on whatever
-//! that is and [`Rooms`] keeps them.
+//! The tool decides what a room contains. Implement [`Room`] on it and
+//! [`Rooms`] stores it.
 //!
 //! ```no_run
 //! use rooms::{Room, Rooms};

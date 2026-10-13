@@ -1,12 +1,11 @@
-//! Everyone's phone, watching the same room.
+//! Sending the room to every phone watching it.
 //!
-//! Server-sent events rather than websockets: the traffic only goes one
-//! way, it is plain HTTP so it survives whatever the venue's wifi does to
-//! it, and the browser reconnects on its own.
+//! Server-sent events rather than websockets. The traffic goes one way, it
+//! is plain HTTP, and the browser reconnects by itself.
 //!
-//! Each watcher is sent the room as it looks now, and then nothing until it
-//! looks different. A room with twenty phones on it and nothing happening
-//! costs a heartbeat every five seconds.
+//! A watcher is sent the room as it is now, and then nothing until it
+//! differs. A room with twenty phones on it and nothing happening costs
+//! one heartbeat every five seconds.
 
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
@@ -26,15 +25,15 @@ use crate::{
 };
 
 /// How often to look at the room. Fast enough that a countdown does not
-/// stutter, slow enough to be free.
+/// stutter, slow enough to cost nothing.
 const TICK_MS: u64 = 250;
-/// Resend an unchanged view this often, so a proxy that drops idle
-/// connections has something to not drop.
+/// Send an unchanged view again this often, to keep a proxy from closing
+/// an idle connection.
 const HEARTBEAT_MS: u64 = 5_000;
 
 /// How long until the next tick boundary. Watchers wake on the boundary
-/// rather than `TICK_MS` after whenever each of them happened to connect,
-/// so twenty phones get the same frame at the same moment.
+/// instead of `TICK_MS` after each one connected, so twenty phones get the
+/// same frame at the same moment.
 fn until_tick(now: u64) -> u64 {
     TICK_MS - now % TICK_MS
 }
@@ -45,15 +44,15 @@ async fn next_tick() {
 
 /// Watches rooms and sends a view whenever it changes.
 ///
-/// `render` is called with every room and the time, and returns the view as
-/// JSON — or `None` to hang up, which is how a watcher of a room that has
-/// been swept is let go.
+/// `render` is called with every room and the time. It returns the view as
+/// JSON, or `None` to close the connection, which is how a watcher of a
+/// deleted room is let go.
 ///
-/// Watching saves nothing, however much `render` touches: a room with
-/// twenty phones on it would otherwise rewrite the state file eighty times
-/// a second. What changes a room is a request, and that is what saves it.
-/// [`one`] is the exception, because a room that moves on its own moves
-/// under a watcher.
+/// Watching never saves, however much `render` changes: a room with twenty
+/// phones on it would otherwise rewrite the state file eighty times a
+/// second. Requests change rooms, and requests save them. [`one`] is the
+/// exception, because a room that moves on its own moves while somebody is
+/// watching it.
 pub fn stream<R: Room>(
     rooms: Arc<Rooms<R>>,
     render: impl Fn(&mut HashMap<String, R>, u64) -> Option<String> + Send + 'static,
@@ -72,7 +71,7 @@ pub fn stream<R: Room>(
             if view != last || now.saturating_sub(last_sent) >= HEARTBEAT_MS {
                 let body = format!("{{\"now\":{now},\"view\":{view}}}");
                 if tx.send(Ok(Event::default().data(body))).await.is_err() {
-                    break; // the phone went away
+                    break; // the phone closed the connection
                 }
                 last = view;
                 last_sent = now;
@@ -82,19 +81,20 @@ pub fn stream<R: Room>(
     });
     (
         // nginx buffers proxied responses by default, which holds every
-        // event until the buffer fills; this is the header that stops it.
+        // event until the buffer fills. This header turns that off.
         [(header::HeaderName::from_static("x-accel-buffering"), "no")],
         Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()),
     )
         .into_response()
 }
 
-/// The common case: watch one room, tick it, and render it, hanging up if
-/// it is gone.
+/// Watches one room, ticks it, and renders it, closing the connection if
+/// the room is gone.
 ///
-/// `render` returns the view as JSON, which is the tool's job rather than
-/// this crate's because a view usually borrows from the room it describes.
-/// Saves when [`Room::tick`] says the room moved, and otherwise not.
+/// `render` returns the view as JSON. That is the tool's job rather than
+/// this crate's, because a view usually borrows from the room it
+/// describes. Saves when [`Room::tick`] reports a change, and not
+/// otherwise.
 pub fn one<R: Room>(
     rooms: Arc<Rooms<R>>,
     key: String,

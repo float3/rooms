@@ -1,8 +1,8 @@
-// The browser half of a room: the parts every one of these tools needs.
+// The browser code the three tools share.
 //
-// A page here holds an event stream open, redraws when the room changes,
-// and posts what the person in front of it did. That is the whole of it,
-// and it is the same in all three tools, so it lives here.
+// A page keeps an event stream open, redraws when the room changes, and
+// posts what the person in front of it did. All three do that the same
+// way, so it is written once here.
 
 /** Everything the server sends is stamped with its own clock. */
 export interface Envelope<V> {
@@ -10,14 +10,15 @@ export interface Envelope<V> {
   view: V;
 }
 
-/** The element with this id, which the page is expected to have. */
+/** The element with this id. The page is expected to have it. */
 export function byId<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
   if (!found) throw new Error(`the page has no #${id}`);
   return found as T;
 }
 
-/** Text going into markup. Names and questions come from the room. */
+/** Escapes text going into markup. Names and questions are typed by
+ *  players, so they cannot be trusted. */
 export function esc(text: unknown): string {
   return String(text).replace(
     /[&<>"]/g,
@@ -25,7 +26,7 @@ export function esc(text: unknown): string {
   );
 }
 
-/** A number as a person would write it, at whatever size it comes in. */
+/** A number written the way a person would, at any size. */
 export function num(value: number | null | undefined): string {
   if (value === null || value === undefined || !isFinite(value)) return "—";
   const size = Math.abs(value);
@@ -52,7 +53,8 @@ export function fail(message: string): void {
   bar.hidden = !message;
 }
 
-/** A refusal, with the status so that a missing room can be told apart. */
+/** A refused request. The status is kept so that a missing room can be
+ *  told from a server that is temporarily unreachable. */
 export class Refused extends Error {
   readonly status: number;
 
@@ -64,8 +66,8 @@ export class Refused extends Error {
 }
 
 /**
- * A request to the room, with the server's refusal as the error message.
- * Every endpoint answers in JSON, including when it says no.
+ * A request to the room. The server's message becomes the error message;
+ * every endpoint answers in JSON, including when it refuses.
  */
 export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
@@ -90,33 +92,33 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   return data as T;
 }
 
-/** How long to wait before trying the room again. */
+/** How long to wait before reconnecting. */
 const RETRY_MS = 2000;
-/** With nothing heard for this long, the page is out of date. */
+/** After this long with nothing received, the page is out of date. */
 const SILENT_MS = 8000;
 
-/** What a watcher can ask about the room it is watching. */
+/** What a page can ask about the room it is watching. */
 export interface Feed {
   /** The server's clock, which is the one every countdown is run off. */
   now: () => number;
   /** Whether the view on screen is still being kept up to date. */
   connected: () => boolean;
-  /** Takes a view that came back from a request, so a screen that acted
-   *  does not wait for its own event to come round. */
+  /** Takes a view returned by a request, so that a screen which just
+   *  acted does not wait for its own event to arrive. */
   accept: (envelope: Envelope<unknown>) => void;
 }
 
 /**
- * Holds a room's event stream open and hands every view to `onView`.
+ * Keeps a room's event stream open and passes every view to `onView`.
  *
  * The first view comes from `snapshot`, so the page fills immediately;
- * after that they come down `events`. The browser reconnects on its own,
- * and this reconnects when the browser gives up. A view that has not
- * changed is not redrawn.
+ * the rest arrive on `events`. The browser reconnects by itself, and this
+ * reconnects when the browser gives up. A view that has not changed is
+ * not redrawn.
  *
- * Phones and the server disagree about the time by enough to matter when
- * something is counting down, so every view is stamped with the server's
- * clock and `now()` works from the difference.
+ * Phone clocks and the server clock differ by enough to matter when
+ * something is counting down, so every view carries the server's time and
+ * `now()` works from the difference.
  */
 export function subscribe<V>(
   snapshot: string,
@@ -181,7 +183,7 @@ export function subscribe<V>(
   };
 }
 
-/** The common case: one room, one view, and a line when it goes away. */
+/** One room, one view, and a message when the room is gone. */
 export function watch<V>(
   path: string,
   draw: (view: V) => void,
@@ -190,7 +192,7 @@ export function watch<V>(
   return subscribe<V>(path, `${path}/events`, draw, () => fail(missing));
 }
 
-/** Asks the server for the link as a QR code and puts it in the page. */
+/** Asks the server for the link as a QR code and inserts it. */
 export function qrInto(id: string, link: string): void {
   fetch("/api/qr", { method: "POST", body: link })
     .then((response) => (response.ok ? response.text() : ""))
@@ -198,16 +200,16 @@ export function qrInto(id: string, link: string): void {
       byId(id).innerHTML = svg;
     })
     .catch(() => {
-      /* the link is written out above it either way */
+      /* the link itself is printed above the code */
     });
 }
 
-/** A whole number of two digits, for a clock. */
+/** Two digits, for a clock. */
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** Milliseconds as a clock counting down: 9:05, or 1:09:05 past an hour. */
+/** Milliseconds as a countdown: 9:05, or 1:09:05 past an hour. */
 export function countdown(ms: number): string {
   const seconds = Math.max(0, Math.ceil(ms / 1000));
   const hours = Math.floor(seconds / 3600);
@@ -217,7 +219,7 @@ export function countdown(ms: number): string {
     : `${minutes}:${pad(seconds % 60)}`;
 }
 
-/** A moment as the clock on the wall said it. */
+/** A moment as a wall clock would show it. */
 export function timeOfDay(at: number): string {
   return new Date(at).toLocaleTimeString([], {
     hour: "2-digit",
@@ -227,9 +229,9 @@ export function timeOfDay(at: number): string {
 }
 
 /**
- * An element, its properties, and its children. Building the page out of
- * these rather than out of strings keeps text that came from the room
- * from ever being read as markup.
+ * An element, its properties and its children. Building the page from
+ * these rather than from strings means text typed by a player is never
+ * parsed as markup.
  */
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -242,9 +244,8 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 /**
- * Runs `build` only when `key` is not what it was last time. Redrawing a
- * list on every frame throws away the scroll position and whatever was
- * half-selected in it.
+ * Runs `build` only when `key` differs from last time. Redrawing a list on
+ * every frame loses the scroll position and any selected text in it.
  */
 export function memo<A extends unknown[]>(
   build: (...args: A) => void,
@@ -257,7 +258,7 @@ export function memo<A extends unknown[]>(
   };
 }
 
-/** Something this phone kept, or the fallback if it kept nothing. */
+/** Something this phone stored, or `fallback` if it stored nothing. */
 export function stored<T>(key: string, fallback: T): T {
   try {
     const kept = localStorage.getItem(key);
@@ -271,11 +272,11 @@ export function persist(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    /* a browser with storage turned off still plays */
+    /* a browser with storage turned off can still play */
   }
 }
 
-/** Puts a link on the clipboard and says so on the button that asked. */
+/** Copies a link and reports the result on the button that asked. */
 export async function copyTo(button: HTMLElement, text: string): Promise<void> {
   const said = button.textContent;
   try {
@@ -312,8 +313,8 @@ export function route(): { kind: Kind; key: string } {
 }
 
 /**
- * What this phone is in the room. Kept so that closing the tab and opening
- * the join link again walks back in as the same person.
+ * This phone's player key. Stored so that closing the tab and opening the
+ * join link again rejoins as the same person.
  */
 export function remembered(ns: string, key: string): string | null {
   try {
@@ -331,12 +332,12 @@ export function remember(ns: string, key: string, value: string): void {
   }
 }
 
-/** The link to put on the wall, from the key the room gave back. */
+/** The join link, from the key the room returned. */
 export function joinLink(join: string): string {
   return `${location.origin}/j/${join}`;
 }
 
-/** Wires a form up to a handler that may refuse. */
+/** Connects a form to a handler whose request may be refused. */
 export function onSubmit(id: string, run: () => Promise<void>): void {
   byId<HTMLFormElement>(id).addEventListener("submit", (event) => {
     event.preventDefault();
@@ -344,14 +345,14 @@ export function onSubmit(id: string, run: () => Promise<void>): void {
   });
 }
 
-/** The same for a button. */
+/** The same, for a button. */
 export function onClick(id: string, run: () => Promise<void>): void {
   byId(id).addEventListener("click", () => {
     run().catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));
   });
 }
 
-/** A number field's value, or null when it is empty or not a number. */
+/** A number field's value, or null if it is empty or not a number. */
 export function value(id: string): number | null {
   const field = byId<HTMLInputElement>(id);
   const given = field.valueAsNumber;

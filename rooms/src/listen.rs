@@ -28,8 +28,8 @@ fn inherited() -> Option<std::net::TcpListener> {
 
 /// The socket to serve on: the one systemd passed, or `addr` bound here.
 ///
-/// Panics if neither works, because a server that is listening nowhere
-/// has nothing to do.
+/// Panics if neither works. A server listening on nothing cannot do
+/// anything useful.
 pub async fn listen(addr: &str) -> TcpListener {
     match inherited() {
         Some(passed) => {
@@ -44,8 +44,8 @@ pub async fn listen(addr: &str) -> TcpListener {
     }
 }
 
-/// What to print at startup, which is the address actually being served
-/// rather than the one that was asked for.
+/// What to print at startup: the address being served, which is not
+/// always the one that was asked for.
 pub fn where_it_listens(listener: &TcpListener) -> String {
     match listener.local_addr() {
         Ok(local) => format!("listening on http://{local}"),

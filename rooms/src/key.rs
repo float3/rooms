@@ -1,8 +1,8 @@
 //! Room keys.
 //!
-//! A key is the only thing standing between a stranger and the room, so it
-//! is long enough that guessing one is not worth anybody's afternoon, and
-//! made of characters that survive being read off a screen and typed in.
+//! A key is the only thing between a stranger and the room, so it is long
+//! enough that guessing one is impractical, and made of characters that
+//! can be read off a screen and typed in without ambiguity.
 
 use rand::{RngExt, distr::Alphanumeric, rng};
 

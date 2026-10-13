@@ -1,9 +1,10 @@
-//! Somewhere to keep the rooms.
+//! Where the rooms are kept.
 //!
-//! One JSON file, rewritten whenever a room changes. That is not a database
-//! and is not trying to be: a few hundred rooms of a few kilobytes each,
-//! written a handful of times a minute by one process. What it buys is that
-//! restarting the server mid-evening does not lose the evening.
+//! One JSON file, rewritten whenever a room changes. The load it has to
+//! take is a few hundred rooms of a few kilobytes each, written a few
+//! times a minute by one process, which a file handles. Restarting the
+//! server in the middle of an evening then does not lose the games in
+//! progress.
 
 use std::{collections::HashMap, fs, io::Write, path::PathBuf, sync::Arc};
 
@@ -12,37 +13,38 @@ use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{key, now_ms};
 
-/// What a tool keeps in a room. The tool decides what that is; this decides
-/// when to forget it.
+/// What a tool keeps in a room. The tool decides what that is; this trait
+/// decides when it is deleted.
 pub trait Room: Serialize + DeserializeOwned + Send + Sync + 'static {
-    /// Somebody looked at the room. The default does nothing, which means
-    /// the room expires on its own schedule rather than on attention.
+    /// Somebody opened the room. The default does nothing, in which case
+    /// the room expires on a schedule instead of on use.
     fn seen(&mut self, _now: u64) {}
 
-    /// Move the room on to `now` — close a round that has run out of time,
-    /// say. Return whether anything changed, so watchers are only woken for
-    /// something. The default is a room that only changes when someone acts.
+    /// Move the room on to `now`: close a round that has run out of time,
+    /// for example. Returns whether anything changed, so that watchers are
+    /// only sent an update when there is one. The default suits a room
+    /// that changes only when someone acts.
     fn tick(&mut self, _now: u64) -> bool {
         false
     }
 
-    /// Whether this room can be dropped. Called every few minutes.
+    /// Whether this room can be deleted. Called every few minutes.
     fn expired(&self, now: u64) -> bool;
 }
 
 pub struct Rooms<R: Room> {
     rooms: Mutex<HashMap<String, R>>,
     path: PathBuf,
-    /// A cap so that a script cannot fill the disk by asking for rooms.
+    /// A limit, so that a script cannot fill the disk by opening rooms.
     max: usize,
 }
 
 type Held<'a, R> = MutexGuard<'a, HashMap<String, R>>;
 
 impl<R: Room> Rooms<R> {
-    /// Rooms from `path`, or no rooms if it is missing or unreadable. An
-    /// unreadable file is not fatal on purpose: the alternative is a tool
-    /// that will not start because of an evening that is over anyway.
+    /// Rooms from `path`, or no rooms if the file is missing or will not
+    /// parse. Refusing to start over an unreadable file would be worse
+    /// than losing the rooms in it, which are usually over by then.
     pub fn load(path: impl Into<PathBuf>, max: usize) -> Arc<Self> {
         let path = path.into();
         let rooms = fs::read_to_string(&path)
@@ -56,9 +58,9 @@ impl<R: Room> Rooms<R> {
         })
     }
 
-    /// Opens a room and returns its key. `make` is handed the key, because
-    /// a room usually wants to keep links to itself. `None` when the store
-    /// is full.
+    /// Opens a room and returns its key. `make` is given the key, because
+    /// a room usually stores links to itself. `None` when the store is
+    /// full.
     pub async fn create(&self, make: impl FnOnce(&str) -> R) -> Option<String> {
         let mut rooms = self.rooms.lock().await;
         if rooms.len() >= self.max {
@@ -70,8 +72,8 @@ impl<R: Room> Rooms<R> {
         Some(key)
     }
 
-    /// Runs `f` against a room, having first told it the time. Saves
-    /// afterwards, so this is for anything that changes the room.
+    /// Runs `f` against a room, after telling it the time. Saves
+    /// afterwards, so use it for anything that changes the room.
     pub async fn with<T>(&self, key: &str, f: impl FnOnce(&mut R, u64) -> T) -> Option<T> {
         let mut rooms = self.rooms.lock().await;
         let now = now_ms();
@@ -83,21 +85,21 @@ impl<R: Room> Rooms<R> {
         Some(out)
     }
 
-    /// Runs `f` against a room without saving: for reads.
+    /// Runs `f` against a room without saving, for reads.
     pub async fn read<T>(&self, key: &str, f: impl FnOnce(&R, u64) -> T) -> Option<T> {
         let rooms = self.rooms.lock().await;
         Some(f(rooms.get(key)?, now_ms()))
     }
 
-    /// The first room `f` says yes to, by key. Tools use this to look a
-    /// room up by a key they handed out that is not the room's own.
+    /// The first room `f` returns something for. Tools use this to find a
+    /// room by a key they handed out that is not the room's own key.
     pub async fn find<T>(&self, f: impl Fn(&str, &R) -> Option<T>) -> Option<T> {
         let rooms = self.rooms.lock().await;
         rooms.iter().find_map(|(key, room)| f(key, room))
     }
 
-    /// Runs `f` over every room and saves. For the migration a tool does
-    /// at startup, when a room gained a field that older ones do not have.
+    /// Runs `f` over every room and saves. For a migration at startup,
+    /// when a room has gained a field that older saved ones lack.
     pub async fn each(&self, f: impl FnMut(&mut R)) {
         let mut rooms = self.rooms.lock().await;
         rooms.values_mut().for_each(f);
@@ -108,16 +110,16 @@ impl<R: Room> Rooms<R> {
         self.rooms.lock().await
     }
 
-    /// Saves the rooms as they stand. Called for you by everything here
-    /// that changes one; public for a tool that changes a room from inside
-    /// a [`crate::stream`] render closure, which holds the map itself.
+    /// Saves the rooms as they are. Everything here that changes a room
+    /// calls it already. It is public for a tool that changes a room from
+    /// inside a [`crate::stream`] render closure, which holds the map.
     pub fn save(&self, rooms: &HashMap<String, R>) {
         let Ok(body) = serde_json::to_string(rooms) else {
             eprintln!("rooms: could not serialise, not saving");
             return;
         };
-        // Through a temporary file: a half-written rooms.json read back
-        // after a crash would lose every room rather than the last change.
+        // Through a temporary file. A half-written rooms.json read back
+        // after a crash would lose every room instead of the last change.
         let temp = self.path.with_extension("tmp");
         let written = fs::File::create(&temp).and_then(|mut file| {
             file.write_all(body.as_bytes())?;
@@ -128,7 +130,7 @@ impl<R: Room> Rooms<R> {
         }
     }
 
-    /// Forgets expired rooms, for ever. Spawn it once at startup.
+    /// Deletes expired rooms. Spawn it once at startup.
     pub async fn sweep(self: Arc<Self>, every: std::time::Duration) {
         loop {
             tokio::time::sleep(every).await;

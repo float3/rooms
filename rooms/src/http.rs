@@ -1,4 +1,4 @@
-//! The handful of responses every one of these tools sends.
+//! The JSON responses these tools answer with.
 
 use axum::{
     http::{StatusCode, header},

@@ -1,9 +1,9 @@
-//! The browser half of a room, and the build step that compiles it.
+//! The browser code for a room, and the build step that compiles it.
 //!
-//! Browsers run JavaScript and nothing else, so something has to produce
-//! it. Nothing in these repos is written in it: the source is TypeScript,
-//! and this turns that into one file while the crate is being built. A tool
-//! calls [`bundle`] from its `build.rs` and includes what comes back.
+//! Browsers run JavaScript, so something has to produce it. None of these
+//! repositories contain hand-written JavaScript: the source is TypeScript,
+//! and this compiles it into one file while the crate is being built. A
+//! tool calls [`bundle`] from its `build.rs` and includes the output.
 //!
 //! ```ignore
 //! // build.rs
@@ -22,10 +22,10 @@ use std::{
     process::Command,
 };
 
-/// The TypeScript every one of these tools shares.
+/// The TypeScript the three tools share.
 pub const ROOMS_TS: &str = include_str!("../client/rooms.ts");
 
-/// The stylesheet every one of these tools shares.
+/// The stylesheet the three tools share.
 pub const ROOMS_CSS: &str = include_str!("../client/rooms.css");
 
 /// What the build step produced.
@@ -45,13 +45,13 @@ fn tell_cargo(path: &Path) {
 /// Compiles `<client>/main.ts` and appends any `<client>/*.css` to the
 /// shared stylesheet.
 ///
-/// The tool's TypeScript imports the shared half as `./rooms`; both are
-/// copied into one directory first so that the import resolves without the
-/// tool having to know where this crate lives.
+/// The tool's TypeScript imports the shared code as `./rooms`. Both are
+/// copied into one directory first, so that the import resolves without
+/// the tool having to know where this crate is.
 ///
-/// `esbuild` does the compiling. `tsc` checks the types if it is on the
-/// path, and the build says so loudly when it is not, rather than quietly
-/// shipping TypeScript nobody has checked.
+/// `esbuild` compiles. `tsc` checks the types when it is on the path, and
+/// the build prints a warning when it is not, rather than shipping
+/// TypeScript that nobody has checked.
 pub fn bundle(client: &str) -> Built {
     let (js, css) = gather(client, true);
     Built {
@@ -60,9 +60,8 @@ pub fn bundle(client: &str) -> Built {
     }
 }
 
-/// The same, for a tool with a look of its own. Petrov Day is a dark
-/// console with a siren on it and shares none of the stylesheet, but it
-/// shares every line of the TypeScript underneath.
+/// The same, for a tool with its own stylesheet. Petrov Day uses none of
+/// the shared CSS and all of the shared TypeScript.
 pub fn script(client: &str) -> PathBuf {
     gather(client, false).0
 }
@@ -110,9 +109,9 @@ fn gather(client: &str, styled: bool) -> (PathBuf, Option<PathBuf>) {
     (js, written)
 }
 
-/// Where a program is, looking the way each platform spells it. npm
-/// installs esbuild and tsc as `.cmd` shims on Windows, and Windows will
-/// not start one of those as a program.
+/// Where a program is, under the name each platform gives it. npm
+/// installs esbuild and tsc as `.cmd` shims on Windows, which Windows
+/// cannot start as programs.
 fn which(program: &str) -> Option<PathBuf> {
     let endings: &[&str] = if cfg!(windows) {
         &[".exe", ".cmd", ".bat", ""]
@@ -216,13 +215,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_shared_half_is_typescript_and_is_here() {
+    fn the_shared_code_is_typescript_and_is_here() {
         assert!(ROOMS_TS.contains("export function watch"));
         assert!(ROOMS_CSS.contains("--paper"));
     }
 
-    /// The point of the whole arrangement: no JavaScript is written by
-    /// hand, so none is checked in.
+    /// No JavaScript is written by hand here, so none is checked in.
     #[test]
     fn nothing_here_is_a_javascript_file() {
         let client = Path::new(env!("CARGO_MANIFEST_DIR")).join("client");

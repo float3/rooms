@@ -2,33 +2,33 @@
 
 [![CI](https://github.com/float3/rooms/actions/workflows/ci.yml/badge.svg)](https://github.com/float3/rooms/actions/workflows/ci.yml)
 
-The part every one of these tools needs: a room other people join from
-their phones.
+A Rust library for tools where a host opens a room and other people join
+it from their phones.
 
-A host opens a room and gets two keys — one to run it, one to hand out.
-Players join with the second, usually by scanning it off a screen. Every
-phone holds an event stream open and sees the room change as it changes.
-The rooms live in one JSON file so a restart does not throw an evening
-away, and they are forgotten when nobody has looked at them for a while.
+The host gets two keys, one to run the room and one to hand out. Players
+join with the second, usually by scanning a QR code off a screen. Each
+phone keeps an event stream open and redraws when the room changes. Rooms
+are kept in one JSON file, so restarting the server in the middle of an
+evening does not lose what is in progress, and a room is deleted once
+nobody has opened it for a day.
 
 Used by [petrov](https://github.com/float3/petrov),
-[estimation](https://github.com/float3/estimation) and
-[number-games](https://github.com/float3/number-games).
+[estimate](https://github.com/float3/estimate) and
+[numbers](https://github.com/float3/numbers).
 
-## What it does and does not do
-
-It does the parts that were going to be written three times:
+## What is here
 
 | | |
 | --- | --- |
-| `Rooms<R>` | keyed store, capped, saved to one JSON file, swept when rooms go cold |
-| `rooms::stream` | server-sent events: a view per watcher, resent only when it differs |
-| `rooms::qr` | the join link as an SVG to put on the wall |
-| `rooms::key` | 24 alphanumeric characters, which is the whole access model |
-| `rooms::http` | the four responses all of these send |
-| `rooms-client` | the browser half: shared TypeScript, shared stylesheet, and the build step that compiles them |
+| `Rooms<R>` | a keyed store with a cap, saved to one JSON file, expired rooms deleted every few minutes |
+| `rooms::stream` | server-sent events: one view per watcher, sent again only when it changes |
+| `rooms::qr` | the join link as an SVG |
+| `rooms::key` | 24 random alphanumeric characters |
+| `rooms::http` | the JSON responses these tools answer with |
+| `rooms::listen` | the socket systemd passed in, or a bound address |
+| `rooms-client` | the TypeScript and CSS the pages share, and the build step that compiles them |
 
-What a room *is* belongs to the tool. Implement `Room` on it:
+The tool decides what a room contains. Implement `Room` on it:
 
 ```rust
 impl Room for Lobby {
@@ -37,71 +37,70 @@ impl Room for Lobby {
 }
 ```
 
-`tick` is there for rooms that move on their own — a round that runs out
-of time — and returns whether anything changed, so watchers are only woken
-for something.
+`tick` is for rooms that change without anyone acting, such as a round
+that runs out of time. It returns whether anything changed, so a watcher
+is only sent an update when there is one.
 
-## The browser half
+## The browser code
 
-`rooms-client` is the other crate here. It carries the TypeScript and the
-stylesheet all three pages share — the event stream, the request helper,
-the number formatting, the join QR code, the look of a panel — and a build
-step that compiles them.
+`rooms-client` is the second crate. It holds the TypeScript and the
+stylesheet the three pages share: the event stream, the request helper,
+number formatting, the QR code, and the styles for panels, tables and
+buttons.
 
-Nothing in these repos is written in JavaScript. A tool keeps its own
-TypeScript in `client/`, calls `rooms_client::bundle("client")` from its
-`build.rs`, and includes the result:
+None of these repositories contain hand-written JavaScript. A tool keeps
+its TypeScript in `client/`, calls `rooms_client::bundle("client")` from
+its `build.rs`, and includes the output:
 
 ```rust
 const APP_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.js"));
 const APP_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.css"));
 ```
 
-`esbuild` compiles and bundles; `tsc` typechecks, and the build warns
-loudly if it is not on the path rather than shipping TypeScript nobody has
-checked. `nix develop` has both.
+`esbuild` compiles and bundles. `tsc` typechecks, and the build prints a
+warning when `tsc` is missing rather than shipping TypeScript that nobody
+has checked. `nix develop` provides both.
 
-The stylesheet is written for a phone held in one hand: one column,
-nothing smaller than a thumb, 17px fields so that iOS does not zoom when
-one is tapped, and the send button stuck to the bottom of the screen.
-These are used standing up in a room, not at a desk.
+The stylesheet is written for a phone: a single column, buttons and
+fields at least 48px tall, and 17px text in form fields, which is above
+the size at which iOS zooms in when a field is tapped. The submit button
+stays at the bottom of the screen while the page scrolls.
 
-## Keys are the whole access model
+## Keys
 
-A room key is 24 random alphanumeric characters and there are no accounts.
-Anyone with the host key runs the room; anyone with the join key is in it.
-That is enough for a room of people who are all looking at the same wall,
-and it is not enough for anything else. Do not put something in a room you
-would mind a stranger reading if they guessed 24 characters.
+A room key is 24 random alphanumeric characters, and there are no
+accounts. Anyone with the host key can run the room; anyone with the join
+key is in it. That is appropriate for a group of people who are in the
+same room as each other, and for nothing else. Do not put anything in a
+room that would matter if a stranger guessed the key.
 
-## Server-sent events, not websockets
+## Server-sent events rather than websockets
 
-Traffic only goes one way, it is plain HTTP so it survives whatever a
-venue's wifi does to it, and the browser reconnects on its own. Watchers
-wake on a shared 250 ms boundary rather than 250 ms after each one
-connected, so twenty phones get the same frame at the same moment. An
-unchanged view is resent every five seconds, which gives an idle proxy
-something to not drop.
+The traffic goes one way, it is plain HTTP, and the browser reconnects by
+itself. Watchers wake on a shared 250 ms boundary instead of 250 ms after
+each one connected, so twenty phones get the same frame at the same
+moment. An unchanged view is sent again every five seconds, which keeps
+an idle proxy from closing the connection.
 
-`stream` sets `X-Accel-Buffering: no`, without which nginx holds every
-event until its buffer fills.
+`stream` sets `X-Accel-Buffering: no`. Without it nginx holds the events
+until its buffer fills.
 
-## One JSON file
+## The JSON file
 
-Not a database and not trying to be: a few hundred rooms of a few
-kilobytes, written by one process a handful of times a minute. Writes go
-through a temporary file and a rename, so a crash mid-write loses the last
-change rather than every room. A file that will not parse starts empty
-rather than stopping the tool from booting — the alternative is refusing
-to start because of an evening that is already over.
+A few hundred rooms of a few kilobytes each, written by one process a few
+times a minute. Writes go to a temporary file which is then renamed, so a
+crash during a write loses the most recent change instead of every room.
+A file that does not parse is treated as empty, because a tool that
+refuses to start is worse than one that has lost a finished evening.
 
 ## Under systemd
 
-`rooms::listen` takes the socket a systemd `.socket` unit passes in rather
-than binding one, which lets the service run with `PrivateNetwork = true`:
-an exploit in a party game cannot reach the internet, the other services
-on loopback, or anything else. Outside systemd it binds the address as
-usual, so `cargo run` is unchanged.
+`rooms::listen` takes the socket a systemd `.socket` unit passes in
+instead of binding one. The service can then run with
+`PrivateNetwork = true` and `RestrictAddressFamilies = "none"`: a
+compromised game server cannot open a connection to the internet or to
+the other services on loopback. Outside systemd it binds the address it
+was given, so `cargo run` behaves as usual.
 
 ## Development
 

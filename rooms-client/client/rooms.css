@@ -1,10 +1,10 @@
-/* The look of a room, which is the same in all three tools.
+/* The styles the three tools share.
  *
- * Written for a phone held in one hand in a room with the lights down,
- * because that is what these are used on: one column, nothing smaller than
- * a thumb, 17px fields so that iOS does not zoom when one is tapped, and a
- * send button that stays within reach of the bottom of the screen. The
- * wider layout is the afterthought here, not the other way round.
+ * Written for a phone, which is what these are played on: a single
+ * column, buttons and fields at least 48px tall, 17px text in fields,
+ * which is above the size at which iOS zooms in when one is tapped, and a
+ * send button that stays at the bottom of the screen. The rules for wider
+ * screens are in one media query at the end.
  */
 
 :root {
@@ -121,7 +121,7 @@ select {
   display: none !important;
 }
 
-/* The line at the top: what this is, and who you are in it. */
+/* The top line: what the tool is, and who you are in the room. */
 .bar {
   display: flex;
   align-items: center;
@@ -177,7 +177,7 @@ select {
   box-shadow: 0 6px 22px var(--shadow);
 }
 
-/* Big enough to hit without looking, on every screen. */
+/* Large enough to press without looking, on every screen. */
 .button {
   display: inline-flex;
   align-items: center;
@@ -216,7 +216,7 @@ select {
   margin-top: 16px;
 }
 
-/* The one button the room is waiting on, kept off the bottom edge. */
+/* The button the room is waiting on, kept clear of the bottom edge. */
 .send {
   position: sticky;
   bottom: calc(10px + env(safe-area-inset-bottom));
@@ -244,7 +244,7 @@ select {
   font-size: 1rem;
 }
 
-/* A number to be typed with one thumb. */
+/* Numbers are typed with one thumb, so they are set larger. */
 input[inputmode="decimal"] {
   font-size: 1.25rem;
   font-variant-numeric: tabular-nums;
@@ -359,7 +359,7 @@ thead th {
   font-weight: 700;
 }
 
-/* A label and a number, which is most of what these screens are. */
+/* A label and a number, which is most of what these screens show. */
 .facts {
   display: grid;
   gap: 2px;
