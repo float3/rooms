@@ -66,7 +66,7 @@ impl<R: Room> Rooms<R> {
         }
         let key = key::new();
         rooms.insert(key.clone(), make(&key));
-        self.write(&rooms);
+        self.save(&rooms);
         Some(key)
     }
 
@@ -79,7 +79,7 @@ impl<R: Room> Rooms<R> {
         room.seen(now);
         room.tick(now);
         let out = f(room, now);
-        self.write(&rooms);
+        self.save(&rooms);
         Some(out)
     }
 
@@ -100,7 +100,10 @@ impl<R: Room> Rooms<R> {
         self.rooms.lock().await
     }
 
-    pub(crate) fn write(&self, rooms: &HashMap<String, R>) {
+    /// Saves the rooms as they stand. Called for you by everything here
+    /// that changes one; public for a tool that changes a room from inside
+    /// a [`crate::stream`] render closure, which holds the map itself.
+    pub fn save(&self, rooms: &HashMap<String, R>) {
         let Ok(body) = serde_json::to_string(rooms) else {
             eprintln!("rooms: could not serialise, not saving");
             return;
@@ -126,7 +129,7 @@ impl<R: Room> Rooms<R> {
             let before = rooms.len();
             rooms.retain(|_, room| !room.expired(now));
             if rooms.len() != before {
-                self.write(&rooms);
+                self.save(&rooms);
             }
         }
     }

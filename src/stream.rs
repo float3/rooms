@@ -48,6 +48,12 @@ async fn next_tick() {
 /// `render` is called with every room and the time, and returns the view as
 /// JSON — or `None` to hang up, which is how a watcher of a room that has
 /// been swept is let go.
+///
+/// Watching saves nothing, however much `render` touches: a room with
+/// twenty phones on it would otherwise rewrite the state file eighty times
+/// a second. What changes a room is a request, and that is what saves it.
+/// [`one`] is the exception, because a room that moves on its own moves
+/// under a watcher.
 pub fn stream<R: Room>(
     rooms: Arc<Rooms<R>>,
     render: impl Fn(&mut HashMap<String, R>, u64) -> Option<String> + Send + 'static,
@@ -60,11 +66,7 @@ pub fn stream<R: Room>(
             let now = now_ms();
             let view = {
                 let mut held = rooms.lock().await;
-                let view = render(&mut held, now);
-                if view.is_some() {
-                    rooms.write(&held);
-                }
-                view
+                render(&mut held, now)
             };
             let Some(view) = view else { break };
             if view != last || now.saturating_sub(last_sent) >= HEARTBEAT_MS {
@@ -89,16 +91,24 @@ pub fn stream<R: Room>(
 
 /// The common case: watch one room, tick it, and render it, hanging up if
 /// it is gone.
-pub fn one<R: Room, V: serde::Serialize>(
+///
+/// `render` returns the view as JSON, which is the tool's job rather than
+/// this crate's because a view usually borrows from the room it describes.
+/// Saves when [`Room::tick`] says the room moved, and otherwise not.
+pub fn one<R: Room>(
     rooms: Arc<Rooms<R>>,
     key: String,
-    view: impl Fn(&R) -> V + Send + 'static,
+    render: impl Fn(&R) -> Option<String> + Send + 'static,
 ) -> Response {
-    stream(rooms, move |held, now| {
+    stream(rooms.clone(), move |held, now| {
         let room = held.get_mut(&key)?;
         room.seen(now);
-        room.tick(now);
-        serde_json::to_string(&view(room)).ok()
+        if room.tick(now) {
+            let view = render(room);
+            rooms.save(held);
+            return view;
+        }
+        render(room)
     })
 }
 
