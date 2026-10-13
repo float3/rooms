@@ -15,10 +15,10 @@
   in {
     formatter = forAllSystems (pkgs: pkgs.alejandra);
 
-    # A library, so there is nothing to install and the output is empty on
-    # purpose. Building it compiles the crate and runs its tests against the
-    # locked dependencies, which is what the tools that depend on it want to
-    # know.
+    # Two libraries, so there is nothing to install and the output is empty
+    # on purpose. Building it compiles both crates and runs their tests
+    # against the locked dependencies, which is what the tools that depend
+    # on them want to know.
     packages = forAllSystems (pkgs: {
       default = pkgs.rustPlatform.buildRustPackage {
         pname = "rooms";
@@ -32,7 +32,7 @@
 
     devShells = forAllSystems (pkgs: {
       default = pkgs.mkShell {
-        packages = with pkgs; [cargo clippy rustc rustfmt];
+        packages = with pkgs; [cargo clippy rustc rustfmt esbuild typescript];
       };
     });
   };

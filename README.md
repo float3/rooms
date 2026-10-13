@@ -26,6 +26,7 @@ It does the parts that were going to be written three times:
 | `rooms::qr` | the join link as an SVG to put on the wall |
 | `rooms::key` | 24 alphanumeric characters, which is the whole access model |
 | `rooms::http` | the four responses all of these send |
+| `rooms-client` | the browser half: shared TypeScript, shared stylesheet, and the build step that compiles them |
 
 What a room *is* belongs to the tool. Implement `Room` on it:
 
@@ -39,6 +40,31 @@ impl Room for Lobby {
 `tick` is there for rooms that move on their own — a round that runs out
 of time — and returns whether anything changed, so watchers are only woken
 for something.
+
+## The browser half
+
+`rooms-client` is the other crate here. It carries the TypeScript and the
+stylesheet all three pages share — the event stream, the request helper,
+the number formatting, the join QR code, the look of a panel — and a build
+step that compiles them.
+
+Nothing in these repos is written in JavaScript. A tool keeps its own
+TypeScript in `client/`, calls `rooms_client::bundle("client")` from its
+`build.rs`, and includes the result:
+
+```rust
+const APP_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.js"));
+const APP_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.css"));
+```
+
+`esbuild` compiles and bundles; `tsc` typechecks, and the build warns
+loudly if it is not on the path rather than shipping TypeScript nobody has
+checked. `nix develop` has both.
+
+The stylesheet is written for a phone held in one hand: one column,
+nothing smaller than a thumb, 17px fields so that iOS does not zoom when
+one is tapped, and the send button stuck to the bottom of the screen.
+These are used standing up in a room, not at a desk.
 
 ## Keys are the whole access model
 

@@ -28,6 +28,9 @@ jobs:
       - name: Check the formatting
         run: nix develop --command cargo fmt --check
 
+      - name: Check the TypeScript
+        run: nix develop --command tsc --noEmit --strict --target es2020 --lib es2020,dom,dom.iterable rooms-client/client/rooms.ts
+
       - name: Build the crate against its locked dependencies
         run: nix build --print-build-logs
 

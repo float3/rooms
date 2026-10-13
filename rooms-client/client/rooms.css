@@ -1,0 +1,489 @@
+/* The look of a room, which is the same in all three tools.
+ *
+ * Written for a phone held in one hand in a room with the lights down,
+ * because that is what these are used on: one column, nothing smaller than
+ * a thumb, 17px fields so that iOS does not zoom when one is tapped, and a
+ * send button that stays within reach of the bottom of the screen. The
+ * wider layout is the afterthought here, not the other way round.
+ */
+
+:root {
+  color-scheme: light dark;
+  --paper: #f8f7f2;
+  --card: #fffefa;
+  --tint: #eaefe3;
+  --tint-warm: #e9eadc;
+  --ink: #183c32;
+  --ink-hover: #2c5544;
+  --on-ink: #fffdf4;
+  --body: #495c51;
+  --border: #d5d9cc;
+  --gold: #dcb96c;
+  --mark: #859264;
+  --focus: #b17d20;
+  --bad: #9a3b2f;
+  --shadow: #15392f14;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #121512;
+    --card: #232a24;
+    --tint: #1a211b;
+    --tint-warm: #241f17;
+    --ink: #e7ece4;
+    --ink-hover: #cdd8ca;
+    --on-ink: #121512;
+    --body: #a3aea2;
+    --border: #2d352e;
+    --gold: #d7b566;
+    --mark: #7d9a77;
+    --focus: #d7b566;
+    --bad: #e08b7d;
+    --shadow: #00000055;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 17px/1.55 Arial, Helvetica, sans-serif;
+  overflow-wrap: break-word;
+}
+
+main {
+  width: min(680px, calc(100% - 28px));
+  margin-inline: auto;
+  padding-bottom: calc(40px + env(safe-area-inset-bottom));
+}
+
+h1,
+h2,
+h3 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  line-height: 1.15;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(1.9rem, 7.5vw, 2.6rem);
+  letter-spacing: -0.03em;
+}
+
+h2 {
+  font-size: 1.45rem;
+  letter-spacing: -0.02em;
+}
+
+h3 {
+  font-size: 1.15rem;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+a,
+button,
+input,
+select {
+  touch-action: manipulation;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* The line at the top: what this is, and who you are in it. */
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.brand img {
+  width: 26px;
+  height: 26px;
+}
+
+.eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--body);
+}
+
+.lead {
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--body);
+  margin-top: 14px;
+}
+
+.note {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--body);
+}
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  margin-top: 18px;
+  box-shadow: 0 6px 22px var(--shadow);
+}
+
+/* Big enough to hit without looking, on every screen. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  padding: 14px 20px;
+  min-height: 54px;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.primary {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--ink-hover);
+}
+
+.actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* The one button the room is waiting on, kept off the bottom edge. */
+.send {
+  position: sticky;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  z-index: 5;
+}
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  margin: 14px 0 6px;
+}
+
+input,
+select {
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 13px 14px;
+  min-height: 54px;
+  /* Under 16px, iOS zooms the page in when the field is tapped and never
+   * zooms back out. */
+  font-size: 1rem;
+}
+
+/* A number to be typed with one thumb. */
+input[inputmode="decimal"] {
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chip {
+  flex: 1 1 auto;
+  border: 1px solid var(--border);
+  background: var(--tint);
+  border-radius: 30px;
+  padding: 10px 16px;
+  min-height: 48px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--on-ink);
+  border-color: var(--ink);
+  font-weight: 700;
+}
+
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 18px 0 0;
+}
+
+legend {
+  padding: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.link {
+  display: block;
+  margin: 8px 0 14px;
+  font-size: 0.95rem;
+  word-break: break-all;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.qr {
+  background: #fff;
+  padding: 10px;
+  border-radius: 8px;
+  width: fit-content;
+}
+
+.qr svg {
+  display: block;
+  width: min(230px, 62vw);
+  height: auto;
+}
+
+.error {
+  background: var(--tint-warm);
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 0.95rem;
+}
+
+.scroll {
+  overflow-x: auto;
+  margin-top: 14px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  text-align: right;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+th:first-child,
+td:first-child {
+  text-align: left;
+  white-space: normal;
+}
+
+thead th {
+  font-size: 0.7rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--body);
+  font-weight: 700;
+}
+
+/* A label and a number, which is most of what these screens are. */
+.facts {
+  display: grid;
+  gap: 2px;
+  margin-top: 14px;
+}
+
+.fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 14px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.fact > span:first-child {
+  color: var(--body);
+  font-size: 0.9rem;
+}
+
+.fact b {
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.fact small {
+  display: block;
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--body);
+}
+
+.big {
+  font: 400 clamp(1.7rem, 8vw, 2.4rem) / 1.15 Georgia, serif;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.good {
+  color: var(--mark);
+  font-weight: 700;
+}
+
+.poor {
+  color: var(--bad);
+  font-weight: 700;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mark);
+  display: inline-block;
+}
+
+.prose {
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+  color: var(--body);
+}
+
+.prose h2 {
+  color: var(--ink);
+  margin: 22px 0 10px;
+}
+
+.prose > h2:first-child {
+  margin-top: 0;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 20px;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.past {
+  border-top: 1px solid var(--border);
+  padding-block: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 0.92rem;
+}
+
+.past > span:last-child {
+  color: var(--body);
+  text-align: right;
+}
+
+@media (min-width: 560px) {
+  main {
+    width: min(680px, calc(100% - 40px));
+  }
+
+  .panel {
+    padding: 22px;
+  }
+
+  .button {
+    width: auto;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .send {
+    position: static;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -343,6 +343,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rooms-client"
+version = "0.1.0"
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"

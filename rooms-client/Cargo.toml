@@ -1,0 +1,8 @@
+[package]
+name = "rooms-client"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "The browser half of a room: shared TypeScript and the build step that compiles it."
+
+[dependencies]
