@@ -90,7 +90,7 @@ until its buffer fills.
 a few hundred rooms of a few kilobytes each, written by one process a few
 times a minute. writes go to a temporary file which is then renamed, so a
 crash during a write loses the most recent change instead of every room.
-A file that does not parse is treated as empty, because a tool that
+a file that does not parse is treated as empty, because a tool that
 refuses to start is worse than one that has lost a finished evening.
 
 ## under systemd
