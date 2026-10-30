@@ -42,6 +42,7 @@ pub mod http;
 pub mod key;
 mod listen;
 pub mod qr;
+pub mod site;
 mod store;
 mod stream;
 
@@ -50,6 +51,19 @@ pub use store::{Room, Rooms};
 pub use stream::{one, stream};
 
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// How often [`Rooms::sweep`] looks for rooms nobody has opened in a day.
+pub const SWEEP: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Listens where [`listen`] says, prints where, and serves `app` until
+/// the process is stopped.
+pub async fn serve(addr: &str, app: axum::Router) {
+    let listener = listen(addr).await;
+    println!("{}", where_it_listens(&listener));
+    axum::serve(listener, app)
+        .await
+        .expect("the server stopped");
+}
 
 pub const HOUR_MS: u64 = 60 * 60 * 1000;
 pub const DAY_MS: u64 = 24 * HOUR_MS;

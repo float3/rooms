@@ -183,13 +183,83 @@ export function subscribe<V>(
   };
 }
 
-/** One room, one view, and a message when the room is gone. */
+/** One room, one view, and a message when the room is gone.
+ *
+ *  `path` is the room's own address, `/api/h/<key>`: the event stream is
+ *  found by adding `/events` to it. Passing the stream's address instead
+ *  would listen on `/events/events` and the page would never update, so
+ *  that is caught here. */
 export function watch<V>(
   path: string,
   draw: (view: V) => void,
   missing = "That room is not here. It may have finished, or the link may be wrong.",
 ): Feed {
-  return subscribe<V>(path, `${path}/events`, draw, () => fail(missing));
+  const room = path.replace(/\/events$/, "");
+  return subscribe<V>(room, `${room}/events`, draw, () => fail(missing));
+}
+
+/** Shows a failed request's message in the error bar. */
+export function failed(e: unknown): void {
+  fail(e instanceof Error ? e.message : String(e));
+}
+
+/** The start screen: one button that opens a room and goes to it. */
+export function opening(button = "open"): void {
+  show("start");
+  onClick(button, async () => {
+    byId<HTMLButtonElement>(button).disabled = true;
+    try {
+      const keys = await api<{ host: string }>("POST", "/api/rooms");
+      location.href = `/h/${keys.host}`;
+    } catch (e) {
+      byId<HTMLButtonElement>(button).disabled = false;
+      throw e;
+    }
+  });
+}
+
+/** The join screen: how many are in already, and a name to join with.
+ *  A phone that has joined this room before goes straight back to its
+ *  own link, which is kept under `ns`, the tool's name. */
+export function joining(ns: string, key: string): void {
+  const kept = remembered(ns, key);
+  if (kept) {
+    location.replace(`/p/${kept}`);
+    return;
+  }
+  show("join");
+  const at = `/api/j/${encodeURIComponent(key)}`;
+  api<{ players: number }>("GET", at)
+    .then((body) => {
+      text(
+        "join-count",
+        body.players === 0
+          ? "You are the first one in."
+          : `${plural(body.players, "person", "people")} already in.`,
+      );
+    })
+    .catch(failed);
+  onSubmit("name-form", async () => {
+    const body = await api<{ player: string }>("POST", at, {
+      name: byId<HTMLInputElement>("name").value,
+    });
+    remember(ns, key, body.player);
+    location.href = `/p/${body.player}`;
+  });
+}
+
+let shownJoin = "";
+
+/** Puts the join link and its QR code on the host's screen, into
+ *  `#join-link` and `#join-qr`, and only redraws them when it changes. */
+export function showJoin(join: string): void {
+  const link = joinLink(join);
+  if (link === shownJoin) return;
+  shownJoin = link;
+  const anchor = byId<HTMLAnchorElement>("join-link");
+  anchor.textContent = link;
+  anchor.href = link;
+  qrInto("join-qr", link);
 }
 
 /** Asks the server for the link as a QR code and inserts it. */

@@ -98,6 +98,13 @@ impl<R: Room> Rooms<R> {
         rooms.iter().find_map(|(key, room)| f(key, room))
     }
 
+    /// The key of the first room `f` holds for: the room a join link
+    /// belongs to, say, when the room is stored under the host's key.
+    pub async fn key_where(&self, f: impl Fn(&R) -> bool) -> Option<String> {
+        self.find(|key, room| f(room).then(|| key.to_string()))
+            .await
+    }
+
     /// Runs `f` over every room and saves. For a migration at startup,
     /// when a room has gained a field that older saved ones lack.
     pub async fn each(&self, f: impl FnMut(&mut R)) {
