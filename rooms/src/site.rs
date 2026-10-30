@@ -16,6 +16,7 @@
 //! rooms::serve(&addr, app).await;
 //! ```
 
+use crate::{Room, Rooms, http, now_ms, qr};
 use axum::{
     Json, Router,
     body::Bytes,
@@ -23,9 +24,6 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Serialize;
-
-use crate::{Room, Rooms, http, now_ms, qr};
 
 /// The page and the files it loads, compiled into the binary.
 #[derive(Clone, Copy)]
@@ -124,16 +122,19 @@ pub async fn open<R: Room>(
 /// Applies a host action to a room and answers with the host's view.
 ///
 /// Every host request answers with the whole view, so the screen that
-/// pressed the button does not wait for its own event stream.
-pub async fn act<R: Room, V: Serialize>(
+/// pressed the button does not wait for its own event stream. `reply`
+/// renders it, usually `|room, now| http::envelope(now, &view::host(room))`:
+/// a view tends to borrow from its room, which is why it is rendered there
+/// rather than handed back.
+pub async fn act<R: Room>(
     rooms: &Rooms<R>,
     key: &str,
     action: impl FnOnce(&mut R, u64) -> Result<(), &'static str>,
-    view: impl FnOnce(&R) -> V,
+    reply: impl FnOnce(&R, u64) -> String,
 ) -> Response {
     let done = rooms
         .with(key, |room, now| {
-            action(room, now).map(|()| http::envelope(now, &view(room)))
+            action(room, now).map(|()| reply(room, now))
         })
         .await;
     match done {
