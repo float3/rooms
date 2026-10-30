@@ -13,8 +13,9 @@ evening does not lose what is in progress, and a room is deleted once
 nobody has opened it for a day.
 
 used by [petrov](https://github.com/float3/petrov),
-[estimate](https://github.com/float3/estimate) and
-[numbers](https://github.com/float3/numbers).
+[estimate](https://github.com/float3/estimate),
+[numbers](https://github.com/float3/numbers) and
+[updating](https://github.com/float3/updating).
 
 ## what is here
 
@@ -25,7 +26,8 @@ used by [petrov](https://github.com/float3/petrov),
 | `rooms::qr` | the join link as an SVG |
 | `rooms::key` | 24 random alphanumeric characters |
 | `rooms::http` | the JSON responses these tools answer with |
-| `rooms::listen` | the socket systemd passed in, or a bound address |
+| `rooms::site` | the page and its files, the clock, QR codes, opening a room and answering a host action |
+| `rooms::listen` | the socket systemd passed in, or a bound address; `rooms::serve` listens and serves |
 | `rooms-client` | the TypeScript and CSS the pages share, and the build step that compiles them |
 
 the tool decides what a room contains. implement `Room` on it:

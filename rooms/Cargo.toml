@@ -16,3 +16,4 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }

@@ -23,6 +23,20 @@ pub fn gone() -> Response {
     )
 }
 
+/// An action the room is not in a state to take, said so the page can
+/// show it: "This question is over."
+pub fn refused(message: &str) -> Response {
+    error(StatusCode::CONFLICT, message)
+}
+
+/// The store is full. Anyone can open a room, so there is a limit.
+pub fn full() -> Response {
+    error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Too many rooms are open at once. Try again in a few minutes.",
+    )
+}
+
 /// A view, stamped with the server's clock. Phones work from the difference
 /// between that and their own rather than trusting either.
 pub fn envelope<T: Serialize>(now: u64, view: &T) -> String {

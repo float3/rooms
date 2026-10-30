@@ -455,6 +455,31 @@ thead th {
   text-align: right;
 }
 
+/* On a phone a table is squeezed to fit rather than scrolled sideways:
+ * headings wrap, the cells give up some padding, and a long name breaks
+ * where it has to. */
+@media (max-width: 559px) {
+  table {
+    font-size: 0.85rem;
+  }
+
+  th,
+  td {
+    padding: 8px 4px;
+  }
+
+  thead th {
+    white-space: normal;
+    letter-spacing: 0.02em;
+    font-size: 0.65rem;
+    vertical-align: bottom;
+  }
+
+  td:first-child {
+    overflow-wrap: anywhere;
+  }
+}
+
 @media (min-width: 560px) {
   main {
     width: min(680px, calc(100% - 40px));
