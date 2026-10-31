@@ -11,6 +11,7 @@
 pub mod game;
 mod statements;
 mod view;
+pub mod warmup;
 
 use std::{
     io::Write,
@@ -138,6 +139,24 @@ struct Skip {
 }
 
 #[derive(Deserialize)]
+struct Guess {
+    /// The partner, by name.
+    name: String,
+    value: i16,
+}
+
+#[derive(Deserialize)]
+struct Kudos {
+    name: String,
+    given: bool,
+}
+
+#[derive(Deserialize)]
+struct Warm {
+    value: i16,
+}
+
+#[derive(Deserialize)]
 struct Suggestion {
     text: String,
     #[serde(default)]
@@ -184,6 +203,30 @@ async fn stop(State(app): State<App>, Path(key): Path<String>) -> Response {
 
 async fn extend(State(app): State<App>, Path(key): Path<String>) -> Response {
     act(&app, &key, |game, now| game.extend(now)).await
+}
+
+async fn warmup(State(app): State<App>, Path(key): Path<String>) -> Response {
+    act(&app, &key, |game, _| game.start_warmup()).await
+}
+
+async fn warmup_next(State(app): State<App>, Path(key): Path<String>) -> Response {
+    act(&app, &key, |game, _| game.warmup_next()).await
+}
+
+async fn warmup_end(State(app): State<App>, Path(key): Path<String>) -> Response {
+    act(&app, &key, |game, _| game.end_warmup()).await
+}
+
+async fn guess(State(app): State<App>, Path(key): Path<String>, Json(g): Json<Guess>) -> Response {
+    act_as(&app, &key, |game, _| game.guess(&key, &g.name, g.value)).await
+}
+
+async fn kudos(State(app): State<App>, Path(key): Path<String>, Json(k): Json<Kudos>) -> Response {
+    act_as(&app, &key, |game, _| game.kudos(&key, &k.name, k.given)).await
+}
+
+async fn warm(State(app): State<App>, Path(key): Path<String>, Json(w): Json<Warm>) -> Response {
+    act_as(&app, &key, |game, _| game.warm_answer(&key, w.value)).await
 }
 
 async fn finish(State(app): State<App>, Path(key): Path<String>) -> Response {
@@ -317,12 +360,18 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
         .route("/api/h/{key}/extend", post(extend))
         .route("/api/h/{key}/finish", post(finish))
         .route("/api/h/{key}/reopen", post(reopen))
+        .route("/api/h/{key}/warmup", post(warmup))
+        .route("/api/h/{key}/warmup/next", post(warmup_next))
+        .route("/api/h/{key}/warmup/end", post(warmup_end))
         .route("/api/j/{key}", get(whose).post(join))
         .route("/api/p/{key}", get(player_state))
         .route("/api/p/{key}/events", get(player_events))
         .route("/api/p/{key}/answer", put(answer))
         .route("/api/p/{key}/mark", put(mark))
         .route("/api/p/{key}/skip", put(skip))
+        .route("/api/p/{key}/guess", put(guess))
+        .route("/api/p/{key}/kudos", put(kudos))
+        .route("/api/p/{key}/warm", put(warm))
         .with_state(app)
 }
 
@@ -485,7 +534,123 @@ mod tests {
         assert_eq!(view["updated"], 1);
         let host_view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
         assert_eq!(host_view["updates"], 1);
-        assert_eq!(host_view["round"]["groups"][0]["people"][0]["after"], 40);
+        assert!(
+            host_view["round"]["groups"][0]["people"][0]["after"].is_null(),
+            "the wall waits until both have guessed"
+        );
+
+        // Bo cannot see where Ada landed until Bo has guessed it.
+        let bo_view = ok(&t.app, "GET", &format!("/api/p/{bo}"), None).await["view"].clone();
+        assert!(bo_view["group"]["partners"][0]["after"].is_null());
+        let bo_view = ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{bo}/guess"),
+            Some(json!({"name": "Ada", "value": 50})),
+        )
+        .await["view"]
+            .clone();
+        assert_eq!(bo_view["group"]["partners"][0]["after"], 40);
+        assert_eq!(bo_view["group"]["partners"][0]["guess"], 50);
+        let (status, _) = call(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{bo}/guess"),
+            Some(json!({"name": "Ada", "value": 40})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "a guess is final");
+
+        // Once everybody has answered and guessed, the wall shows it.
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{ada}/guess"),
+            Some(json!({"name": "Bo", "value": 15})),
+        )
+        .await;
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{bo}/answer"),
+            Some(json!({"id": 0, "value": 20})),
+        )
+        .await;
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{ada}/kudos"),
+            Some(json!({"name": "Bo", "given": true})),
+        )
+        .await;
+        let host_view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        let group = &host_view["round"]["groups"][0];
+        assert_eq!(group["settled"], true);
+        assert_eq!(group["people"][0]["after"], 40);
+        assert_eq!(group["spot"], "🦊 Fox");
+        // 160 apart before, 40 after: 120 closed.
+        assert_eq!(group["closed"], 120);
+        let bo_score = host_view["leaders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["name"] == "Bo")
+            .unwrap()
+            .clone();
+        assert_eq!(bo_score["kudos"], 1);
+    }
+
+    #[tokio::test]
+    async fn a_warm_up_question_goes_before_clue_then_after_then_the_answer() {
+        let t = test("warmup");
+        let (host, ada, _) = ready(&t.app).await;
+        let view = ok(&t.app, "POST", &format!("/api/h/{host}/warmup"), None).await["view"].clone();
+        assert_eq!(view["phase"], "warmup");
+        assert_eq!(view["warmup"]["stage"], "before");
+        assert!(view["warmup"]["outcome"].is_null(), "no answer yet");
+
+        let mine = ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{ada}/warm"),
+            Some(json!({"value": 50})),
+        )
+        .await["view"]["warmup"]
+            .clone();
+        assert_eq!(mine["before"], 50);
+        assert!(mine["clue"].is_null(), "no clue before the clues are dealt");
+        let (status, _) = call(&t.app, "POST", &format!("/api/h/{host}/round"), None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "no round during a warm-up");
+
+        ok(&t.app, "POST", &format!("/api/h/{host}/warmup/next"), None).await;
+        let mine = ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{ada}/warm"),
+            Some(json!({"value": 70})),
+        )
+        .await["view"]["warmup"]
+            .clone();
+        assert_eq!(mine["after"], 70);
+        assert!(mine["clue"].as_str().unwrap().ends_with('.'));
+        assert!(mine["result"].is_null());
+
+        let view =
+            ok(&t.app, "POST", &format!("/api/h/{host}/warmup/next"), None).await["view"].clone();
+        assert!(view["warmup"]["outcome"]["truth"].is_boolean());
+        assert_eq!(
+            view["calibrated"].as_array().unwrap().len(),
+            2,
+            "Ada and the bot"
+        );
+        let mine = ok(&t.app, "GET", &format!("/api/p/{ada}"), None).await["view"].clone();
+        assert!(mine["warmup"]["result"]["bits_after"].is_number());
+        assert!(mine["calibration"].is_array());
+
+        let view =
+            ok(&t.app, "POST", &format!("/api/h/{host}/warmup/end"), None).await["view"].clone();
+        assert_eq!(view["phase"], "answering");
+        assert_eq!(view["warmups"], 1);
     }
 
     #[tokio::test]

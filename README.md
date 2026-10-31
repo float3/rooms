@@ -80,15 +80,61 @@ points, counts as an update.
 
 ## who wins
 
-the person who moved others most. after a round, every point a partner
-moves towards your answer on the statement you were given is a point for
-you. moving away earns the partner nothing, and your own movement never
-scores for you, so the only way to score is to change somebody else's
-mind. the facilitator sees the board all evening; everybody sees the top
-three when the evening ends.
+points for three things, over every round:
 
-the facilitator also sees where the room is most split, what people
-changed their minds on, and how many answers each person gave and changed.
+| | |
+| --- | --- |
+| closing the gap | how far apart you and your partner were before, less after, on the scale under pairing. both of you get it, whoever moved: the conversation is a joint task, not a debate |
+| guessing your partner | after a round each phone asks where your partner stands now, before showing it. 100 for exactly right, falling with the square of the miss, nothing from fifty percentage points (three steps) away. squared error is a proper score for a best guess, so the way to score is to guess what you really expect |
+| "I learned something from you" | one tap per partner per round, worth 25 to the partner |
+
+moving somebody towards you is no longer the score: that made the
+evening a debate, and it paid to start from an extreme. it is still
+counted, as one prize among several. at the end the wall shows the
+prizes: best listener, most worth listening to, best conversation, open
+mind (who moved furthest towards their partners), most persuasive, and
+in the bingo mode, bingo.
+
+the wall shows a pair's new answers only once both of them have answered
+and guessed, because the guesses are made blind.
+
+each pair gets a meeting spot, an animal: "🦊 Fox". it is large on both
+phones and on the wall, so two people can find each other in a full room.
+
+in the bingo mode, pairing still goes by disagreement first, but between
+statements about as contested it prefers one that brings either person
+closer to a line, most of all the square that completes one. without
+that, a 4×4 line needed four rounds on exactly the right statements, and
+nearly nobody got one.
+
+## the warm-up
+
+before the statements, the facilitator can ask a few questions that have
+a right answer. each is a puzzle with exact odds: a bag picked by a coin,
+a medical test with a known false alarm rate, a coin that may be a trick
+one. the answer really is drawn at random, and each phone is dealt its
+own clue drawn from it: a ball from the bag, a test result, a few flips.
+
+everybody says how likely the claim is from the setup alone, then again
+with their clue, and may compare clues with their neighbours. then the
+answer comes out. answers are scored in bits against a coin flip,
+log2(p / 50%) for the chance you gave what turned out true: 50% scores
+nothing, sure and right nearly a bit, sure and wrong a lot. each phone
+also shows where Bayes would have been with its clue, from the true start
+and from where its owner started.
+
+the Bayes bot is par: it starts from the true prior, gets a clue like
+everybody else, and updates exactly. it is on the warm-up board with the
+room.
+
+## the wall
+
+the facilitator's screen is built for a projector: one slim bar of
+buttons, and below it what the room should look at. the join code and
+who is in; the warm-up question and how it came out; during a round the
+clock and every pair's spot, names and statement; after it, which pairs
+are done; at the end, the prizes. the room's settings and the detailed
+statistics fold away underneath.
 
 ## statements
 
@@ -113,7 +159,7 @@ sudo cat /var/lib/private/updating/suggestions.jsonl
 
 | | |
 | --- | --- |
-| `/h/<key>` | runs the room. Keep it; it is the only way back in. |
+| `/h/<key>` | runs the room, and is the screen for the wall. Keep it; it is the only way back in. |
 | `/j/<key>` | joins it. This is the one on the wall. |
 | `/p/<key>` | one player's own, kept by their phone. |
 

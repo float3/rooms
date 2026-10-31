@@ -241,3 +241,295 @@ details.topic small {
 #tabs {
   margin-top: 16px;
 }
+
+/* ------------------------------------------------------------ the wall
+ * The facilitator's screen is usually projected, so what the room looks
+ * at is large, and the buttons are one slim bar above it. */
+
+body.wall-screen main {
+  width: min(1400px, calc(100% - 28px));
+}
+
+.controls {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  background: var(--paper);
+  border-bottom: 1px solid var(--border);
+}
+
+.controls .eyebrow {
+  margin: 0 8px 0 0;
+}
+
+.controls .button {
+  width: auto;
+  min-height: 42px;
+  padding: 8px 16px;
+  font-size: 0.92rem;
+}
+
+.stage {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+#wall .eyebrow {
+  margin: 0 0 6px;
+}
+
+.wall-claim {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.8rem, 4.2vw, 3.4rem);
+  line-height: 1.15;
+  margin: 6px 0 14px;
+}
+
+.wall-setup {
+  font-size: clamp(1rem, 1.6vw, 1.35rem);
+  line-height: 1.5;
+  color: var(--body);
+  max-width: 60ch;
+}
+
+.wall-line {
+  font-size: clamp(1rem, 1.8vw, 1.45rem);
+  line-height: 1.45;
+  margin: 10px 0;
+}
+
+.wall-verdict {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(3rem, 9vw, 6.5rem);
+  line-height: 1;
+  margin: 8px 0 18px;
+}
+
+.wall-head {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.wall-clock {
+  font-size: clamp(3rem, 9vw, 7rem);
+  margin: 0;
+}
+
+/* One card per pair, so people can find their spot from across the room. */
+.pairs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.pair {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.pair.settled {
+  border-color: var(--mark);
+}
+
+.pair p {
+  margin: 0 0 4px;
+}
+
+.pair-spot {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.pair-names {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.pair-names .done::after {
+  content: " ✓";
+  color: var(--mark);
+}
+
+.pair-statement {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.wall-board {
+  list-style: none;
+  counter-reset: place;
+  padding: 0;
+  margin: 12px 0 0;
+  max-width: 560px;
+}
+
+.wall-board li {
+  counter-increment: place;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: clamp(1.05rem, 1.8vw, 1.4rem);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.wall-board li::before {
+  content: counter(place) ".";
+  color: var(--body);
+  min-width: 2ch;
+}
+
+.wall-board li b {
+  flex: 1;
+}
+
+.wall-board li.bot {
+  color: var(--body);
+  font-style: italic;
+}
+
+/* The room's warm-up answers, one dot each along 0 to 100%. */
+.dots {
+  position: relative;
+  height: 64px;
+  margin: 8px 0 12px;
+  border-bottom: 2px solid var(--border);
+}
+
+.dots i {
+  position: absolute;
+  bottom: 6px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: var(--ink);
+  opacity: 0.6;
+}
+
+.dots-end {
+  position: absolute;
+  top: 0;
+  font-size: 0.85rem;
+  color: var(--body);
+}
+
+.dots-end:last-of-type {
+  right: 0;
+}
+
+.dots-end.right {
+  color: var(--mark);
+  font-weight: 700;
+}
+
+.awards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 10px 0 16px;
+}
+
+.award {
+  background: color-mix(in srgb, var(--gold) 16%, var(--card));
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--gold);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.award p {
+  margin: 0 0 4px;
+}
+
+.award-names {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.35rem;
+}
+
+/* Settings and statistics fold away under the wall. */
+.fold > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.fold .panel {
+  box-shadow: none;
+  border: 0;
+  padding: 0;
+}
+
+/* Once the rounds start, the code shrinks to a corner for latecomers. */
+#room.tight {
+  padding: 12px;
+}
+
+#room.tight .eyebrow,
+#room.tight .note {
+  font-size: 0.75rem;
+}
+
+@media (min-width: 900px) {
+  .stage {
+    grid-template-columns: 1fr auto;
+  }
+
+  #room:not(.tight) .qr svg {
+    width: 300px;
+  }
+}
+
+/* ------------------------------------------------------------ the phone */
+
+/* Where to meet, big enough to hold up across a room. */
+.spot {
+  font-size: clamp(2.4rem, 13vw, 3.6rem);
+  font-weight: 700;
+  line-height: 1.1;
+  margin: 0 0 4px;
+}
+
+.clue {
+  font-size: 1.2rem;
+  font-weight: 700;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--gold) 20%, var(--card));
+  border-left: 5px solid var(--gold);
+}
+
+.step {
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.step.done p {
+  margin: 0;
+}
+
+.big-value {
+  font-size: 1.3rem;
+}
+
+.verdict-line {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 2rem;
+  margin: 8px 0;
+}
+
+#now h3 {
+  margin-top: 18px;
+}

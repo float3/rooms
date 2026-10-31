@@ -9,9 +9,11 @@
 use serde::Serialize;
 
 use crate::game::{
-    Game, Group, MINUTES, Mode, Persuaded, Phase, Player, SIDES, Scale, Statement, UPDATE,
+    Game, Group, KUDOS_POINTS, MINUTES, Mode, Phase, Player, SIDES, Scale, Score, Statement,
+    UPDATE, spot,
 };
 use crate::statements::TOPICS;
+use crate::warmup::{self, Stage, bits};
 
 #[derive(Serialize)]
 pub struct TopicChoice {
@@ -25,15 +27,24 @@ pub struct TopicChoice {
 pub struct Said {
     name: String,
     before: i16,
+    /// Only once the whole group is done, since partners guess blind.
     after: Option<i16>,
+    /// Whether they have answered and guessed.
+    done: bool,
 }
 
 #[derive(Serialize)]
 pub struct GroupView<'a> {
     number: usize,
+    /// Where the group meets: "🦊 Fox".
+    spot: String,
     statement: &'a Statement,
     people: Vec<Said>,
     gap: i16,
+    /// Everybody has answered and guessed, so the result can be shown.
+    settled: bool,
+    /// How much of the gap they closed, once settled.
+    closed: Option<i16>,
 }
 
 #[derive(Serialize)]
@@ -52,32 +63,214 @@ pub struct Who {
     updated: usize,
     moved: i32,
     lines: usize,
-    persuaded: Persuaded,
+    score: Score,
 }
 
-/// One line of the persuasion board.
+/// One line of the board.
 #[derive(Serialize)]
 pub struct Leader {
     name: String,
     #[serde(flatten)]
-    persuaded: Persuaded,
+    score: Score,
 }
 
-/// Who moved the people they talked to most, best first.
+/// The board, best total first.
 fn leaders(game: &Game) -> Vec<Leader> {
-    let scores = game.persuasion();
+    let scores = game.scores();
     let mut out: Vec<Leader> = game
         .players
         .iter()
         .filter_map(|p| {
-            scores.get(&p.key).map(|&persuaded| Leader {
+            scores.get(&p.key).map(|&score| Leader {
                 name: p.name.clone(),
-                persuaded,
+                score,
+            })
+        })
+        .filter(|l| l.score.total > 0)
+        .collect();
+    out.sort_by_key(|l| std::cmp::Reverse(l.score.total));
+    out
+}
+
+/// A prize at the end of the evening, which can be shared.
+#[derive(Serialize)]
+pub struct Award {
+    title: &'static str,
+    why: &'static str,
+    names: Vec<String>,
+    /// The number behind it, in words.
+    detail: String,
+}
+
+/// Several small prizes rather than one: for listening, for being worth
+/// listening to, for changing your own mind, for changing others', and
+/// for a bingo.
+fn awards(game: &Game) -> Vec<Award> {
+    let scores = game.scores();
+    let named = |key: &String| game.player(key).map(|p| p.name.clone());
+    let best = |value: &dyn Fn(&Score) -> i32| -> (i32, Vec<String>) {
+        let top = scores.values().map(value).max().unwrap_or(0);
+        let names = scores
+            .iter()
+            .filter(|(_, s)| top > 0 && value(s) == top)
+            .filter_map(|(k, _)| named(k))
+            .collect();
+        (top, names)
+    };
+    let mut out = Vec::new();
+    let mut add = |title, why, (top, names): (i32, Vec<String>), detail: String| {
+        if top > 0 && !names.is_empty() {
+            out.push(Award {
+                title,
+                why,
+                names,
+                detail,
+            });
+        }
+    };
+    let (top, names) = best(&|s| s.listening);
+    add(
+        "Best listener",
+        "Guessed best where their partners would land",
+        (top, names),
+        format!("{top} points"),
+    );
+    let (top, names) = best(&|s| s.kudos as i32);
+    add(
+        "Most worth listening to",
+        "Partners said they learned something from them",
+        (top, names),
+        format!("{top} × learned something"),
+    );
+    let (top, names) = best(&|s| s.best_closed);
+    add(
+        "Best conversation",
+        "Closed the widest gap in one round",
+        (top, names),
+        format!("{} points closed", top),
+    );
+    let (top, names) = best(&|s| s.opened);
+    add(
+        "Open mind",
+        "Moved furthest towards the people they talked to",
+        (top, names),
+        format!("{top} points moved"),
+    );
+    let (top, names) = best(&|s| s.persuaded);
+    add(
+        "Most persuasive",
+        "Partners moved furthest towards them",
+        (top, names),
+        format!("{top} points"),
+    );
+    if game.mode == Mode::Bingo {
+        let top = game
+            .players
+            .iter()
+            .map(|p| game.lines(p))
+            .max()
+            .unwrap_or(0);
+        let names = game
+            .players
+            .iter()
+            .filter(|p| top > 0 && game.lines(p) == top)
+            .map(|p| p.name.clone())
+            .collect();
+        add(
+            "Bingo",
+            "Talked about a full line of their card",
+            (top as i32, names),
+            format!("{} {}", top, if top == 1 { "line" } else { "lines" }),
+        );
+    }
+    out
+}
+
+/// One line of the warm-up board.
+#[derive(Serialize)]
+pub struct Calibrated {
+    name: String,
+    bits: f64,
+    /// The Bayes bot, which is par.
+    bot: bool,
+}
+
+/// Everybody's warm-up bits, best first, with the bot among them.
+fn calibrated(game: &Game) -> Vec<Calibrated> {
+    if !game.warmups.iter().any(|w| w.stage == Stage::Revealed) {
+        return Vec::new();
+    }
+    let (board, bot) = warmup::board(&game.warmups);
+    let mut out: Vec<Calibrated> = board
+        .iter()
+        .filter_map(|(key, &bits)| {
+            Some(Calibrated {
+                name: game.player(key)?.name.clone(),
+                bits,
+                bot: false,
             })
         })
         .collect();
-    out.sort_by_key(|l| std::cmp::Reverse((l.persuaded.points, l.persuaded.people)));
+    out.push(Calibrated {
+        name: "Bayes bot".into(),
+        bits: bot,
+        bot: true,
+    });
+    out.sort_by(|a, b| b.bits.total_cmp(&a.bits));
     out
+}
+
+/// How a warm-up question came out.
+#[derive(Serialize)]
+pub struct Outcome {
+    truth: bool,
+    /// The room's answers after their clues, for the wall to plot.
+    answers: Vec<i16>,
+    mean_before: Option<f64>,
+    mean_after: Option<f64>,
+    /// The bot's bits on this one.
+    bot: Option<f64>,
+    /// The room's average bits on this one.
+    room: Option<f64>,
+}
+
+#[derive(Serialize)]
+pub struct WarmHost<'a> {
+    number: usize,
+    setup: &'a str,
+    claim: &'a str,
+    prior: f64,
+    stage: Stage,
+    before: usize,
+    after: usize,
+    outcome: Option<Outcome>,
+}
+
+fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
+    let all: Vec<f64> = values.collect();
+    (!all.is_empty()).then(|| all.iter().sum::<f64>() / all.len() as f64)
+}
+
+fn warm_host(game: &Game) -> Option<WarmHost<'_>> {
+    let w = game.warmup()?;
+    let truth = w.puzzle.truth;
+    Some(WarmHost {
+        number: w.number,
+        setup: &w.puzzle.setup,
+        claim: &w.puzzle.claim,
+        prior: w.puzzle.prior,
+        stage: w.stage,
+        before: w.before.len(),
+        after: w.after.len(),
+        outcome: (w.stage == Stage::Revealed).then(|| Outcome {
+            truth,
+            answers: w.after.values().copied().collect(),
+            mean_before: mean(w.before.values().map(|&v| v as f64)),
+            mean_after: mean(w.after.values().map(|&v| v as f64)),
+            bot: w.bot_bits(),
+            room: mean(w.after.values().map(|&v| bits(v, truth))),
+        }),
+    })
 }
 
 #[derive(Serialize)]
@@ -117,6 +310,13 @@ pub struct HostView<'a> {
     answers: usize,
     updates: usize,
     leaders: Vec<Leader>,
+    /// What one kudos is worth, to explain the board.
+    kudos_points: i32,
+    awards: Vec<Award>,
+    warmup: Option<WarmHost<'a>>,
+    /// How many warm-up questions have been asked.
+    warmups: usize,
+    calibrated: Vec<Calibrated>,
 }
 
 fn name_of(game: &Game, key: &str) -> String {
@@ -125,13 +325,20 @@ fn name_of(game: &Game, key: &str) -> String {
 
 fn group_view<'a>(game: &'a Game, number: usize, group: &Group) -> Option<GroupView<'a>> {
     let statement = game.statement(group.statement)?;
+    let settled = group.settled();
     let people: Vec<Said> = group
         .members
         .iter()
         .map(|m| Said {
             name: name_of(game, m),
             before: group.before.get(m).copied().unwrap_or(0),
-            after: group.after.get(m).copied(),
+            after: group.after.get(m).copied().filter(|_| settled),
+            done: group.after.contains_key(m)
+                && group
+                    .members
+                    .iter()
+                    .filter(|o| *o != m)
+                    .all(|o| group.guesses.get(m).is_some_and(|g| g.contains_key(o))),
         })
         .collect();
     let gap = people
@@ -143,11 +350,15 @@ fn group_view<'a>(game: &'a Game, number: usize, group: &Group) -> Option<GroupV
         })
         .max()
         .unwrap_or(0);
+    let (before, after) = group.gaps(statement);
     Some(GroupView {
         number,
+        spot: spot(number - 1),
         statement,
         people,
         gap,
+        settled,
+        closed: settled.then(|| (before - after).max(0)),
     })
 }
 
@@ -231,7 +442,7 @@ pub fn host(game: &Game) -> HostView<'_> {
                 .collect(),
             waiting: r.waiting.iter().map(|k| name_of(game, k)).collect(),
         });
-    let scores = game.persuasion();
+    let scores = game.scores();
     let players: Vec<Who> = game
         .players
         .iter()
@@ -244,7 +455,7 @@ pub fn host(game: &Game) -> HostView<'_> {
                 updated,
                 moved,
                 lines: game.lines(p),
-                persuaded: scores.get(&p.key).copied().unwrap_or_default(),
+                score: scores.get(&p.key).copied().unwrap_or_default(),
             }
         })
         .collect();
@@ -291,6 +502,11 @@ pub fn host(game: &Game) -> HostView<'_> {
         updates: game.players.iter().map(|p| moved(game, p).0).sum(),
         players,
         leaders: leaders(game),
+        kudos_points: KUDOS_POINTS,
+        awards: awards(game),
+        warmup: warm_host(game),
+        warmups: game.warmups.len(),
+        calibrated: calibrated(game),
         contested: pick(&contested_ids),
         shifted: pick(&shifted_ids),
         popular: pick(&popular_ids),
@@ -320,12 +536,18 @@ pub struct Seen {
 pub struct Partner {
     name: String,
     answer: i16,
+    /// Where they stand now: only once this player has guessed it.
     after: Option<i16>,
+    /// This player's guess at it.
+    guess: Option<i16>,
+    /// Whether this player said they learned something from them.
+    kudos: bool,
 }
 
 #[derive(Serialize)]
 pub struct Mine<'a> {
     number: usize,
+    spot: String,
     statement: &'a Statement,
     partners: Vec<Partner>,
     before: i16,
@@ -358,13 +580,69 @@ pub struct PlayerView<'a> {
     updated: usize,
     moved: i32,
     players: usize,
-    persuaded: Persuaded,
+    score: Score,
     /// In the free mode, the quick-fire feed's next statements, best first.
     next: Vec<u32>,
-    /// Their place on the persuasion board, once they have one.
+    /// Their place on the board, once they have one.
     rank: Option<usize>,
     /// The board's top three, shown when the evening is over.
     winners: Vec<Leader>,
+    /// The prizes, when the evening is over.
+    awards: Vec<Award>,
+    warmup: Option<WarmMine<'a>>,
+    /// Their warm-up bits so far, and the bot's.
+    calibration: Option<(f64, f64)>,
+}
+
+/// How a warm-up question came out for one player.
+#[derive(Serialize)]
+pub struct WarmResult {
+    truth: bool,
+    bits_before: Option<f64>,
+    bits_after: Option<f64>,
+    /// Where Bayes would be after their clue, from the true prior...
+    ideal: f64,
+    /// ...and from where they said they were before it.
+    ideal_from_yours: Option<f64>,
+}
+
+#[derive(Serialize)]
+pub struct WarmMine<'a> {
+    number: usize,
+    setup: &'a str,
+    claim: &'a str,
+    stage: Stage,
+    before: Option<i16>,
+    after: Option<i16>,
+    /// Their clue, once the clues are out.
+    clue: Option<String>,
+    result: Option<WarmResult>,
+}
+
+fn warm_mine<'a>(game: &'a Game, key: &str) -> Option<WarmMine<'a>> {
+    let w = game.warmup()?;
+    let before = w.before.get(key).copied();
+    let after = w.after.get(key).copied();
+    let truth = w.puzzle.truth;
+    Some(WarmMine {
+        number: w.number,
+        setup: &w.puzzle.setup,
+        claim: &w.puzzle.claim,
+        stage: w.stage,
+        before,
+        after,
+        clue: (w.stage != Stage::Before).then(|| w.clue(key)),
+        result: (w.stage == Stage::Revealed).then(|| {
+            let (ideal, ideal_from_yours) = w.ideal(key);
+            WarmResult {
+                truth,
+                bits_before: before.map(|v| bits(v, truth)),
+                bits_after: after.map(|v| bits(v, truth)),
+                ideal,
+                ideal_from_yours,
+            }
+        }),
+    })
 }
 
 /// How many statements ahead the quick-fire feed is sent.
@@ -410,17 +688,25 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         })
         .collect();
     let group = game.group_of(key).and_then(|(i, g)| {
+        let guesses = g.guesses.get(key);
+        let kudos = g.kudos.get(key);
         Some(Mine {
             number: i + 1,
+            spot: spot(i),
             statement: game.statement(g.statement)?,
             partners: g
                 .members
                 .iter()
                 .filter(|m| *m != key)
-                .map(|m| Partner {
-                    name: name_of(game, m),
-                    answer: g.before.get(m).copied().unwrap_or(0),
-                    after: g.after.get(m).copied(),
+                .map(|m| {
+                    let guess = guesses.and_then(|gs| gs.get(m)).copied();
+                    Partner {
+                        name: name_of(game, m),
+                        answer: g.before.get(m).copied().unwrap_or(0),
+                        after: g.after.get(m).copied().filter(|_| guess.is_some()),
+                        guess,
+                        kudos: kudos.is_some_and(|k| k.contains(m)),
+                    }
                 })
                 .collect(),
             before: g.before.get(key).copied().unwrap_or(0),
@@ -428,7 +714,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         })
     });
     let waiting = matches!(game.phase, Phase::Talking | Phase::Updating) && group.is_none();
-    let opposites = if game.phase == Phase::Talking {
+    let opposites = if matches!(game.phase, Phase::Talking | Phase::Warmup) {
         Vec::new()
     } else {
         let mut found: Vec<Opposite> = game
@@ -454,12 +740,19 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
     let (updated, moved) = moved(game, me);
     let board = leaders(game);
     let rank = board.iter().position(|l| l.name == me.name).map(|i| i + 1);
-    let persuaded = game.persuasion().get(key).copied().unwrap_or_default();
-    let winners = if game.phase == Phase::Finished {
+    let score = game.scores().get(key).copied().unwrap_or_default();
+    let finished = game.phase == Phase::Finished;
+    let winners = if finished {
         board.into_iter().take(3).collect()
     } else {
         Vec::new()
     };
+    let calibration = calibrated(game);
+    let calibration = calibration
+        .iter()
+        .find(|c| !c.bot && c.name == me.name)
+        .zip(calibration.iter().find(|c| c.bot))
+        .map(|(mine, bot)| (mine.bits, bot.bits));
     Some(PlayerView {
         name: me.name.clone(),
         mode: game.mode,
@@ -480,9 +773,12 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         updated,
         moved,
         players: game.players.len(),
-        persuaded,
+        score,
         rank,
         winners,
+        awards: if finished { awards(game) } else { Vec::new() },
+        warmup: warm_mine(game, key),
+        calibration,
         next: if free {
             game.feed(me, FEED)
         } else {
