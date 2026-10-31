@@ -10,6 +10,7 @@ import {
   countdown,
   el,
   fail,
+  here,
   failed,
   hide,
   joining,
@@ -262,7 +263,7 @@ function start(): void {
   show("start");
   onClick("open", async () => {
     const keys = await api<{ host: string; join: string }>("POST", "/api/rooms");
-    location.href = `/h/${keys.host}`;
+    location.href = here(`/h/${keys.host}`);
   });
   suggestions("suggest-start", "idea-start", "idea-start-chance", "idea-start-done");
 }
