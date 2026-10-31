@@ -512,3 +512,14 @@ thead th {
     animation: none !important;
   }
 }
+
+/* Inside the shared room's frame, which shows the header and the join
+ * link itself. */
+.embedded .bar,
+.embedded #room {
+  display: none;
+}
+
+.embedded main {
+  padding-top: 8px;
+}
