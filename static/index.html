@@ -61,64 +61,71 @@
   </section>
 
   <section id="screen-host" hidden>
-    <div class="panel" id="room">
-      <h2>The room</h2>
-      <p class="note">Everybody opens this:</p>
-      <a class="link" id="join-link" href="#"></a>
-      <div class="qr" id="join-qr"></div>
-      <p class="note" id="who"></p>
+    <!-- The facilitator's buttons, in one bar that stays at the top. -->
+    <div class="controls" id="rounds">
+      <span class="eyebrow" id="h-phase"></span>
+      <button class="button primary" id="start">Start a round</button>
+      <button class="button" id="stop">End the round now</button>
+      <button class="button" id="extend">One more minute</button>
+      <button class="button" id="warm-start">Warm-up question</button>
+      <button class="button primary" id="warm-next">Deal the clues</button>
+      <button class="button" id="warm-end">Back to the statements</button>
+      <button class="button" id="finish">End the evening</button>
+      <button class="button" id="reopen">Carry on after all</button>
     </div>
 
-    <form class="panel" id="setup">
-      <h2>What the room talks about</h2>
-      <fieldset>
-        <legend>How people answer</legend>
-        <div class="chips" id="modes"></div>
-        <p class="note" id="mode-note"></p>
-      </fieldset>
-      <fieldset>
-        <legend>How statements are answered</legend>
-        <div class="chips" id="scales"></div>
-        <p class="note" id="scale-note"></p>
-      </fieldset>
-      <fieldset>
-        <legend>Topics</legend>
-        <div class="chips" id="topics"></div>
-      </fieldset>
-      <fieldset id="sides-set">
-        <legend>Card size</legend>
-        <div class="chips" id="sides"></div>
-      </fieldset>
-      <label for="custom">Your own statements, one per line</label>
-      <textarea id="custom" rows="4" placeholder="Munich needs more bike lanes.&#10;%What is the chance it snows on Christmas?"></textarea>
-      <p class="note">Start a line with % to ask for a probability instead of
-        agreement.</p>
-      <div class="actions"><button class="button primary" type="submit">Use these</button></div>
-      <p class="note" id="setup-note"></p>
-    </form>
-    <section class="panel" id="locked" hidden>
-      <h2>What the room talks about</h2>
-      <p class="note" id="locked-note"></p>
-    </section>
+    <div class="stage">
+      <!-- What the room looks at: built for a projector. -->
+      <section id="wall"></section>
+      <div class="panel" id="room">
+        <p class="eyebrow">Join on your phone</p>
+        <div class="qr" id="join-qr"></div>
+        <a class="link" id="join-link" href="#"></a>
+        <p class="note" id="who"></p>
+      </div>
+    </div>
 
-    <section class="panel" id="rounds">
-      <p class="eyebrow" id="h-phase"></p>
-      <p class="clock" id="h-clock"></p>
+    <details class="panel fold">
+      <summary>Room settings</summary>
       <fieldset>
         <legend>Minutes per round</legend>
         <div class="chips" id="lengths"></div>
       </fieldset>
-      <div class="actions">
-        <button class="button primary" id="start">Start a round</button>
-        <button class="button" id="stop">End the round now</button>
-        <button class="button" id="extend">One more minute</button>
-        <button class="button" id="finish">End the evening</button>
-        <button class="button" id="reopen">Carry on after all</button>
+      <form id="setup">
+        <fieldset>
+          <legend>How people answer</legend>
+          <div class="chips" id="modes"></div>
+          <p class="note" id="mode-note"></p>
+        </fieldset>
+        <fieldset>
+          <legend>How statements are answered</legend>
+          <div class="chips" id="scales"></div>
+          <p class="note" id="scale-note"></p>
+        </fieldset>
+        <fieldset>
+          <legend>Topics</legend>
+          <div class="chips" id="topics"></div>
+        </fieldset>
+        <fieldset id="sides-set">
+          <legend>Card size</legend>
+          <div class="chips" id="sides"></div>
+        </fieldset>
+        <label for="custom">Your own statements, one per line</label>
+        <textarea id="custom" rows="4" placeholder="Munich needs more bike lanes.&#10;%What is the chance it snows on Christmas?"></textarea>
+        <p class="note">Start a line with % to ask for a probability instead of
+          agreement.</p>
+        <div class="actions"><button class="button primary" type="submit">Use these</button></div>
+        <p class="note" id="setup-note"></p>
+      </form>
+      <div id="locked" hidden>
+        <p class="note" id="locked-note"></p>
       </div>
-      <div id="groups"></div>
-    </section>
+    </details>
 
-    <section id="board"></section>
+    <details class="panel fold">
+      <summary>Points and statistics</summary>
+      <section id="board"></section>
+    </details>
   </section>
 
   <section id="screen-join" hidden>

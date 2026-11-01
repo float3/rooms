@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::statements::{TOPICS, topic};
+use crate::warmup::{MAX_WARMUPS, Stage, Warmup};
 
 pub const MAX_PLAYERS: usize = 200;
 pub const MAX_ROUNDS: usize = 100;
@@ -33,6 +34,46 @@ pub const EXTRA_MS: u64 = 60_000;
 /// scale of `Statement::gap`: one step of agreement, or ten points of
 /// probability.
 pub const UPDATE: i16 = 20;
+/// What one "I learned something from you" is worth on the board.
+pub const KUDOS_POINTS: i32 = 25;
+/// How much more a statement is worth talking about, in the bingo mode,
+/// for each square already marked in the line it is on...
+const LINE_STEP: i32 = 25;
+/// ...and for the square that completes a line.
+const LINE_DONE: i32 = 90;
+/// Where each group meets, so that two people can find each other in a
+/// full room by shouting "fox!" rather than a name.
+pub const SPOTS: &[&str] = &[
+    "🦊 Fox",
+    "🐙 Octopus",
+    "🦉 Owl",
+    "🐢 Turtle",
+    "🦋 Butterfly",
+    "🐝 Bee",
+    "🐸 Frog",
+    "🦀 Crab",
+    "🐧 Penguin",
+    "🦔 Hedgehog",
+    "🐳 Whale",
+    "🦜 Parrot",
+    "🐌 Snail",
+    "🦒 Giraffe",
+    "🐞 Ladybird",
+    "🦩 Flamingo",
+    "🐿️ Squirrel",
+    "🦘 Kangaroo",
+    "🐼 Panda",
+    "🦭 Seal",
+];
+
+/// The meeting spot of the group at this index in a round.
+pub fn spot(index: usize) -> String {
+    let name = SPOTS[index % SPOTS.len()];
+    match index / SPOTS.len() {
+        0 => name.to_string(),
+        n => format!("{name} {}", n + 1),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -72,6 +113,8 @@ pub enum Scale {
 pub enum Phase {
     /// Answering, and finding people by hand.
     Answering,
+    /// A calibration warm-up question is on. See `crate::warmup`.
+    Warmup,
     /// A round is on: everybody is talking to who they were paired with.
     Talking,
     /// The round is over; everybody says where they stand now.
@@ -141,15 +184,86 @@ pub struct Group {
     pub before: BTreeMap<String, i16>,
     /// Where each said they stood after it.
     pub after: BTreeMap<String, i16>,
+    /// Each member's guess at where each partner stands after talking: by
+    /// who guessed, then whom. A guess is final once given, and the
+    /// partner's answer is only shown to somebody who has guessed it.
+    #[serde(default)]
+    pub guesses: BTreeMap<String, BTreeMap<String, i16>>,
+    /// "I learned something from you": by who said it, to whom.
+    #[serde(default)]
+    pub kudos: BTreeMap<String, BTreeSet<String>>,
 }
 
-/// What somebody's conversations did to the people they talked to.
+impl Group {
+    /// Where somebody stands after the round: their new answer, or where
+    /// they were if they gave none.
+    pub fn landed(&self, key: &str) -> Option<i16> {
+        self.after.get(key).or(self.before.get(key)).copied()
+    }
+
+    /// How far apart the group was, on the shared scale, before and after.
+    pub fn gaps(&self, s: &Statement) -> (i16, i16) {
+        let widest = |at: &dyn Fn(&str) -> Option<i16>| -> i16 {
+            let mut widest = 0;
+            for a in &self.members {
+                for b in &self.members {
+                    if let (Some(x), Some(y)) = (at(a), at(b)) {
+                        widest = widest.max(s.gap(x, y));
+                    }
+                }
+            }
+            widest
+        };
+        (
+            widest(&|k| self.before.get(k).copied()),
+            widest(&|k| self.landed(k)),
+        )
+    }
+
+    /// Whether everybody in the group has said where they stand now and
+    /// guessed where their partners do. Until then the wall does not show
+    /// the group's new answers, because the guesses are made blind.
+    pub fn settled(&self) -> bool {
+        self.members.iter().all(|m| {
+            self.after.contains_key(m)
+                && self
+                    .members
+                    .iter()
+                    .filter(|o| *o != m)
+                    .all(|o| self.guesses.get(m).is_some_and(|g| g.contains_key(o)))
+        })
+    }
+}
+
+/// How a guess at a partner's answer scores: 100 for exactly right,
+/// falling with the square of the miss, and nothing from fifty
+/// percentage points (three steps of agreement) away. Squared error is a
+/// proper score for a best guess, so the way to score most is to guess
+/// what you really expect.
+pub fn guess_points(s: &Statement, guess: i16, actual: i16) -> i32 {
+    let miss = s.gap(guess, actual) as i32;
+    (100 - miss * miss / 100).max(0)
+}
+
+/// What somebody's conversations came to, over every round.
 #[derive(Clone, Copy, Default, Serialize)]
-pub struct Persuaded {
-    /// Points their partners moved towards them, on the agreement scale.
-    pub points: i32,
-    /// How many times a partner moved towards them at all.
-    pub people: u32,
+pub struct Score {
+    /// How far apart they and their partners were before, less after: the
+    /// same for everybody in the group, however it closed.
+    pub together: i32,
+    /// Points for guessing where their partners would land.
+    pub listening: i32,
+    /// How many times a partner said they learned something from them.
+    pub kudos: u32,
+    /// How far partners moved towards them. Shown as an award, not added
+    /// to the total, so that winning an argument is not the game.
+    pub persuaded: i32,
+    /// How far they moved towards their partners.
+    pub opened: i32,
+    /// The widest gap they closed in one conversation.
+    pub best_closed: i32,
+    /// What the board is sorted by: together, listening and kudos.
+    pub total: i32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -178,6 +292,10 @@ pub struct Game {
     /// When the round being talked ends.
     pub ends: u64,
     pub rounds: Vec<Round>,
+    /// The calibration questions asked so far. The last is the one on
+    /// while the phase is `Warmup`.
+    #[serde(default)]
+    pub warmups: Vec<Warmup>,
     pub last_seen: u64,
     /// Seeds the dealing, so two rooms deal differently.
     seed: u64,
@@ -214,14 +332,14 @@ pub fn tidy(text: &str, max: usize) -> String {
 
 /// A small generator for dealing. Nothing here needs to be unpredictable,
 /// only different from room to room and person to person.
-fn mix(mut x: u64) -> u64 {
+pub(crate) fn mix(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^ (x >> 31)
 }
 
-fn hash(text: &str) -> u64 {
+pub(crate) fn hash(text: &str) -> u64 {
     text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
         (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
     })
@@ -315,6 +433,7 @@ impl Game {
             phase: Phase::Answering,
             ends: 0,
             rounds: Vec::new(),
+            warmups: Vec::new(),
             last_seen: now,
             seed,
         };
@@ -652,6 +771,9 @@ impl Game {
                 })
             })
             .collect();
+        if self.phase == Phase::Warmup {
+            return Err("Finish the warm-up first.");
+        }
         let (groups, waiting) = pair(self, &met);
         if groups.is_empty() {
             return Err(
@@ -711,6 +833,71 @@ impl Game {
         Ok(())
     }
 
+    /// Asks the next calibration question. Only between rounds, because
+    /// a round's screens would be lost under it.
+    pub fn start_warmup(&mut self) -> Result<(), &'static str> {
+        if self.phase != Phase::Answering {
+            return Err("A warm-up question is asked between rounds.");
+        }
+        if self.warmups.len() >= MAX_WARMUPS {
+            return Err("That is as many warm-up questions as one room holds.");
+        }
+        self.warmups
+            .push(Warmup::new(self.warmups.len() + 1, self.seed));
+        self.phase = Phase::Warmup;
+        Ok(())
+    }
+
+    /// The question being asked, to change.
+    fn warmup_mut(&mut self) -> Result<&mut Warmup, &'static str> {
+        if self.phase != Phase::Warmup {
+            return Err("No warm-up question is on.");
+        }
+        self.warmups.last_mut().ok_or("No warm-up question is on.")
+    }
+
+    /// The question being asked.
+    pub fn warmup(&self) -> Option<&Warmup> {
+        (self.phase == Phase::Warmup)
+            .then(|| self.warmups.last())
+            .flatten()
+    }
+
+    /// Deals the clues, then reveals the answer.
+    pub fn warmup_next(&mut self) -> Result<(), &'static str> {
+        let w = self.warmup_mut()?;
+        w.stage = match w.stage {
+            Stage::Before => Stage::Clue,
+            Stage::Clue => Stage::Revealed,
+            Stage::Revealed => return Err("The answer is already out."),
+        };
+        Ok(())
+    }
+
+    /// Back to the statements.
+    pub fn end_warmup(&mut self) -> Result<(), &'static str> {
+        self.warmup_mut()?;
+        self.phase = Phase::Answering;
+        Ok(())
+    }
+
+    /// Says how likely the warm-up claim is: before the clue, or after it.
+    pub fn warm_answer(&mut self, key: &str, percent: i16) -> Result<(), &'static str> {
+        if self.player(key).is_none() {
+            return Err("You are not in this room.");
+        }
+        if !(0..=100).contains(&percent) {
+            return Err("That answer is off the scale.");
+        }
+        let w = self.warmup_mut()?;
+        match w.stage {
+            Stage::Before => w.before.insert(key.to_string(), percent),
+            Stage::Clue => w.after.insert(key.to_string(), percent),
+            Stage::Revealed => return Err("The answer is already out."),
+        };
+        Ok(())
+    }
+
     /// The group this player is in this round, if a round has been run.
     pub fn group_of(&self, key: &str) -> Option<(usize, &Group)> {
         if !matches!(self.phase, Phase::Talking | Phase::Updating) {
@@ -725,7 +912,10 @@ impl Game {
     }
 
     /// The statement two people disagree on most, and by how much,
-    /// preferring one neither has talked about yet.
+    /// preferring one neither has talked about yet, and in the bingo mode
+    /// one that brings either of them closer to a line. Disagreement still
+    /// leads: a line is worth at most `LINE_DONE` to each of them, against
+    /// up to 200 for the widest disagreement.
     pub fn best_between(&self, a: &Player, b: &Player) -> Option<(u32, i16)> {
         let mut best: Option<(i32, u32, i16)> = None;
         for (&id, &x) in &a.answers {
@@ -737,7 +927,10 @@ impl Game {
             };
             let gap = s.gap(x, y);
             let fresh = !a.marked.contains(&id) && !b.marked.contains(&id);
-            let score = gap as i32 + if fresh { 1000 } else { 0 };
+            let score = gap as i32
+                + if fresh { 1000 } else { 0 }
+                + self.towards_a_line(a, id)
+                + self.towards_a_line(b, id);
             if best.is_none_or(|(s, _, _)| score > s) {
                 best = Some((score, id, gap));
             }
@@ -745,18 +938,102 @@ impl Game {
         best.map(|(_, id, gap)| (id, gap))
     }
 
-    /// How far each person moved the people they were paired with, over
-    /// every round: the points somebody came towards your answer on the
-    /// statement you were given. Moving away earns the partner nothing,
-    /// and your own movement never counts for you, so the only way to
-    /// score is to change somebody else's mind. By player key.
-    pub fn persuasion(&self) -> BTreeMap<String, Persuaded> {
-        let mut out: BTreeMap<String, Persuaded> = BTreeMap::new();
+    /// The group this player is in during the round being played, to
+    /// change.
+    fn my_group(&mut self, key: &str) -> Result<&mut Group, &'static str> {
+        if !matches!(self.phase, Phase::Talking | Phase::Updating) {
+            return Err("No round is on.");
+        }
+        self.rounds
+            .last_mut()
+            .and_then(|r| {
+                r.groups
+                    .iter_mut()
+                    .find(|g| g.members.iter().any(|m| m == key))
+            })
+            .ok_or("You are not in a group this round.")
+    }
+
+    /// The key of somebody in this player's group, by name.
+    fn partner_key(&self, key: &str, name: &str) -> Result<String, &'static str> {
+        let (_, group) = self
+            .group_of(key)
+            .ok_or("You are not in a group this round.")?;
+        group
+            .members
+            .iter()
+            .find(|m| *m != key && self.player(m).is_some_and(|p| p.name == name))
+            .cloned()
+            .ok_or("That is not somebody you talked to this round.")
+    }
+
+    /// Guesses where a partner stands after talking. Final once given.
+    pub fn guess(&mut self, key: &str, name: &str, value: i16) -> Result<(), &'static str> {
+        let partner = self.partner_key(key, name)?;
+        let statement = self.my_group(key)?.statement;
+        let (low, high) = self
+            .statement(statement)
+            .ok_or("That statement is not in this room.")?
+            .range();
+        if value < low || value > high {
+            return Err("That guess is off the scale.");
+        }
+        let mine = self
+            .my_group(key)?
+            .guesses
+            .entry(key.to_string())
+            .or_default();
+        if mine.contains_key(&partner) {
+            return Err("Your guess is in, and it stays as it is.");
+        }
+        mine.insert(partner, value);
+        Ok(())
+    }
+
+    /// Says, or takes back, that somebody learned something from a
+    /// partner.
+    pub fn kudos(&mut self, key: &str, name: &str, given: bool) -> Result<(), &'static str> {
+        let partner = self.partner_key(key, name)?;
+        let mine = self
+            .my_group(key)?
+            .kudos
+            .entry(key.to_string())
+            .or_default();
+        if given {
+            mine.insert(partner);
+        } else {
+            mine.remove(&partner);
+        }
+        Ok(())
+    }
+
+    /// What everybody's conversations came to, over every round, by player
+    /// key.
+    ///
+    /// The total rewards closing a gap together, guessing well where your
+    /// partner lands, and partners saying they learned something from you.
+    /// It does not reward moving somebody towards you on its own: that
+    /// made the evening a debate, and it paid to start from an extreme.
+    /// It is still counted, as one award among several.
+    pub fn scores(&self) -> BTreeMap<String, Score> {
+        let mut out: BTreeMap<String, Score> = BTreeMap::new();
         for round in &self.rounds {
             for g in &round.groups {
                 let Some(s) = self.statement(g.statement) else {
                     continue;
                 };
+                let answered = g.members.iter().any(|m| g.after.contains_key(m));
+                let (before, after) = g.gaps(s);
+                let closed = if answered {
+                    (before - after).max(0) as i32
+                } else {
+                    0
+                };
+                for m in &g.members {
+                    let score = out.entry(m.clone()).or_default();
+                    score.together += closed;
+                    score.best_closed = score.best_closed.max(closed);
+                }
                 for mover in &g.members {
                     let (Some(&from), Some(&to)) = (g.before.get(mover), g.after.get(mover)) else {
                         continue;
@@ -765,17 +1042,62 @@ impl Game {
                         let Some(&there) = g.before.get(other) else {
                             continue;
                         };
-                        let closer = s.gap(from, there) - s.gap(to, there);
-                        if closer > 0 {
-                            let p = out.entry(other.clone()).or_default();
-                            p.points += closer as i32;
-                            p.people += 1;
+                        let closer = (s.gap(from, there) - s.gap(to, there)).max(0) as i32;
+                        out.entry(other.clone()).or_default().persuaded += closer;
+                        out.entry(mover.clone()).or_default().opened += closer;
+                    }
+                }
+                for (by, guessed) in &g.guesses {
+                    for (of, &guess) in guessed {
+                        if let Some(&actual) = g.after.get(of) {
+                            out.entry(by.clone()).or_default().listening +=
+                                guess_points(s, guess, actual);
                         }
                     }
                 }
+                for to in g.kudos.values().flatten() {
+                    out.entry(to.clone()).or_default().kudos += 1;
+                }
             }
         }
+        for score in out.values_mut() {
+            score.total = score.together + score.listening + KUDOS_POINTS * score.kudos as i32;
+        }
         out
+    }
+
+    /// How much talking about this statement would bring a player closer
+    /// to a bingo line: more for a line that is nearly full, most for the
+    /// square that completes one. Nothing outside the bingo mode.
+    fn towards_a_line(&self, player: &Player, id: u32) -> i32 {
+        if self.mode != Mode::Bingo || player.marked.contains(&id) {
+            return 0;
+        }
+        let side = self.side as usize;
+        if player.card.len() != side * side {
+            return 0;
+        }
+        let Some(at) = player.card.iter().position(|&c| c == id) else {
+            return 0;
+        };
+        let (row, col) = (at / side, at % side);
+        let on = |r: usize, c: usize| player.marked.contains(&player.card[r * side + c]);
+        let mut lines: Vec<usize> = vec![
+            (0..side).filter(|&c| on(row, c)).count(),
+            (0..side).filter(|&r| on(r, col)).count(),
+        ];
+        if row == col {
+            lines.push((0..side).filter(|&i| on(i, i)).count());
+        }
+        if row + col == side - 1 {
+            lines.push((0..side).filter(|&i| on(i, side - 1 - i)).count());
+        }
+        let best = lines.into_iter().max().unwrap_or(0);
+        if best + 1 == side {
+            LINE_DONE
+        } else {
+            best as i32 * LINE_STEP
+        }
     }
 
     /// Whether this player's marked squares make a line, and how many.
@@ -889,6 +1211,8 @@ fn pair(game: &Game, met: &HashSet<(String, String)>) -> (Vec<Group>, Vec<String
                 (b.key.clone(), b.answers[&id]),
             ]),
             after: BTreeMap::new(),
+            guesses: BTreeMap::new(),
+            kudos: BTreeMap::new(),
         });
     }
 
@@ -1127,24 +1451,119 @@ mod tests {
         assert_eq!(r.groups.len(), 2);
     }
 
-    #[test]
-    fn moving_towards_your_partner_scores_for_them_not_you() {
-        let mut g = room(Mode::Open);
-        let s = g.deck.iter().find(|s| !s.chance).unwrap().id;
+    /// A and B on one probability statement, A at 80% and B at 20%, after
+    /// a round.
+    fn talked() -> (Game, String, String, u32) {
+        let mut g = Game::new(1);
+        g.setup(Mode::Open, Scale::Chance, &["mind".into()], "", 4)
+            .unwrap();
+        let s = g.deck[0].id;
         let a = g.join("A", 1).unwrap();
         let b = g.join("B", 1).unwrap();
-        g.answer(&a, s, Some(6)).unwrap();
-        g.answer(&b, s, Some(1)).unwrap();
+        g.answer(&a, s, Some(80)).unwrap();
+        g.answer(&b, s, Some(20)).unwrap();
         g.start_round(0).unwrap();
         g.stop().unwrap();
-        // B comes two of the five steps towards A, which is 166 - 100
-        // points; A moves away from B.
-        g.answer(&b, s, Some(3)).unwrap();
-        g.answer(&a, s, Some(7)).unwrap();
-        let p = g.persuasion();
-        assert_eq!(p[&a].points, 66);
-        assert_eq!(p[&a].people, 1);
-        assert!(!p.contains_key(&b), "moving away gives the partner nothing");
+        (g, a, b, s)
+    }
+
+    #[test]
+    fn closing_a_gap_scores_the_same_for_both_whoever_moved() {
+        let (mut g, a, b, s) = talked();
+        // 60 points apart, 120 on the shared scale. B comes to 50: 30
+        // apart, 60 on the scale, so 60 closed, for both of them.
+        g.answer(&b, s, Some(50)).unwrap();
+        let p = g.scores();
+        assert_eq!(p[&a].together, 60);
+        assert_eq!(p[&b].together, 60);
+        assert_eq!(p[&a].persuaded, 60, "still counted, as an award");
+        assert_eq!(p[&b].opened, 60);
+        assert_eq!(p[&a].total, 60, "persuading is not in the total");
+    }
+
+    #[test]
+    fn moving_apart_closes_nothing() {
+        let (mut g, a, b, s) = talked();
+        g.answer(&a, s, Some(90)).unwrap();
+        g.answer(&b, s, Some(10)).unwrap();
+        let p = g.scores();
+        assert_eq!(p[&a].together, 0);
+        assert_eq!(p[&b].persuaded, 0);
+    }
+
+    #[test]
+    fn a_good_guess_at_your_partner_scores_and_is_final() {
+        let (mut g, a, b, s) = talked();
+        g.guess(&a, "B", 40).unwrap();
+        assert!(g.guess(&a, "B", 50).is_err(), "no second guess");
+        assert!(g.guess(&a, "A", 50).is_err(), "not at yourself");
+        assert!(g.guess(&a, "B", 101).is_err(), "on the scale");
+        g.answer(&b, s, Some(50)).unwrap();
+        // 10 percentage points off is 20 on the shared scale: 100 - 4.
+        assert_eq!(g.scores()[&a].listening, 96);
+        assert_eq!(guess_points(g.statement(s).unwrap(), 0, 100), 0);
+    }
+
+    #[test]
+    fn a_guess_at_somebody_who_never_answered_scores_nothing() {
+        let (mut g, a, _, _) = talked();
+        g.guess(&a, "B", 20).unwrap();
+        assert_eq!(g.scores()[&a].listening, 0);
+    }
+
+    #[test]
+    fn learning_something_from_a_partner_is_worth_points_to_them() {
+        let (mut g, a, b, _) = talked();
+        g.kudos(&a, "B", true).unwrap();
+        g.kudos(&a, "B", true).unwrap();
+        assert_eq!(g.scores()[&b].kudos, 1, "once per partner per round");
+        assert_eq!(g.scores()[&b].total, KUDOS_POINTS);
+        g.kudos(&a, "B", false).unwrap();
+        assert_eq!(g.scores().get(&b).map_or(0, |s| s.kudos), 0);
+    }
+
+    #[test]
+    fn a_group_is_settled_once_everybody_answered_and_guessed() {
+        let (mut g, a, b, s) = talked();
+        let settled = |g: &Game| g.rounds[0].groups[0].settled();
+        g.answer(&a, s, Some(70)).unwrap();
+        g.answer(&b, s, Some(30)).unwrap();
+        assert!(!settled(&g));
+        g.guess(&a, "B", 25).unwrap();
+        g.guess(&b, "A", 75).unwrap();
+        assert!(settled(&g));
+    }
+
+    #[test]
+    fn nothing_can_be_guessed_outside_a_round() {
+        let (mut g, a, _, _) = talked();
+        g.finish().unwrap();
+        assert!(g.guess(&a, "B", 50).is_err());
+        assert!(g.kudos(&a, "B", true).is_err());
+    }
+
+    #[test]
+    fn in_bingo_a_square_that_completes_a_line_is_preferred() {
+        let mut g = room(Mode::Bingo);
+        let a = g.join("A", 1).unwrap();
+        let card = g.player(&a).unwrap().card.clone();
+        // Two of the top row marked: the third completes it.
+        g.mark(&a, card[0], true).unwrap();
+        g.mark(&a, card[1], true).unwrap();
+        let me = g.player(&a).unwrap();
+        assert_eq!(g.towards_a_line(me, card[2]), LINE_DONE);
+        assert_eq!(g.towards_a_line(me, card[0]), 0, "already marked");
+        // The middle of the bottom row is in a line with one mark (the
+        // middle column has card[1]).
+        assert_eq!(g.towards_a_line(me, card[7]), LINE_STEP);
+    }
+
+    #[test]
+    fn every_group_has_somewhere_to_meet() {
+        assert_eq!(spot(0), "🦊 Fox");
+        assert_eq!(spot(SPOTS.len()), "🦊 Fox 2");
+        let all: BTreeSet<String> = (0..100).map(spot).collect();
+        assert_eq!(all.len(), 100, "no two groups share a spot");
     }
 
     #[test]

@@ -10,13 +10,16 @@ import {
   countdown,
   el,
   fail,
+  here,
   failed,
   hide,
   joining,
+  landed,
   onClick,
   onSubmit,
   plural,
   route,
+  sentBox,
   show,
   showJoin,
   text,
@@ -25,7 +28,8 @@ import {
 
 type Mode = "bingo" | "open" | "free";
 type Scale = "written" | "agree" | "chance";
-type Phase = "answering" | "talking" | "updating" | "finished";
+type Phase = "answering" | "warmup" | "talking" | "updating" | "finished";
+type Stage = "before" | "clue" | "revealed";
 
 interface Statement {
   id: number;
@@ -45,13 +49,17 @@ interface Said {
   name: string;
   before: number;
   after: number | null;
+  done: boolean;
 }
 
 interface GroupView {
   number: number;
+  spot: string;
   statement: Statement;
   people: Said[];
   gap: number;
+  settled: boolean;
+  closed: number | null;
 }
 
 interface RoundView {
@@ -60,18 +68,75 @@ interface RoundView {
   waiting: string[];
 }
 
-interface Persuaded {
-  points: number;
-  people: number;
+interface Score {
+  together: number;
+  listening: number;
+  kudos: number;
+  persuaded: number;
+  opened: number;
+  best_closed: number;
+  total: number;
 }
 
-interface Leader extends Persuaded {
+interface Leader extends Score {
   name: string;
+}
+
+interface Award {
+  title: string;
+  why: string;
+  names: string[];
+  detail: string;
+}
+
+interface Calibrated {
+  name: string;
+  bits: number;
+  bot: boolean;
+}
+
+interface Outcome {
+  truth: boolean;
+  answers: number[];
+  mean_before: number | null;
+  mean_after: number | null;
+  bot: number | null;
+  room: number | null;
+}
+
+interface WarmHost {
+  number: number;
+  setup: string;
+  claim: string;
+  prior: number;
+  stage: Stage;
+  before: number;
+  after: number;
+  outcome: Outcome | null;
+}
+
+interface WarmResult {
+  truth: boolean;
+  bits_before: number | null;
+  bits_after: number | null;
+  ideal: number;
+  ideal_from_yours: number | null;
+}
+
+interface WarmMine {
+  number: number;
+  setup: string;
+  claim: string;
+  stage: Stage;
+  before: number | null;
+  after: number | null;
+  clue: string | null;
+  result: WarmResult | null;
 }
 
 interface Who {
   name: string;
-  persuaded: Persuaded;
+  score: Score;
   answered: number;
   of: number;
   updated: number;
@@ -111,6 +176,11 @@ interface HostView {
   answers: number;
   updates: number;
   leaders: Leader[];
+  kudos_points: number;
+  awards: Award[];
+  warmup: WarmHost | null;
+  warmups: number;
+  calibrated: Calibrated[];
 }
 
 interface Seen {
@@ -131,10 +201,13 @@ interface Partner {
   name: string;
   answer: number;
   after: number | null;
+  guess: number | null;
+  kudos: boolean;
 }
 
 interface Mine {
   number: number;
+  spot: string;
   statement: Statement;
   partners: Partner[];
   before: number;
@@ -165,9 +238,12 @@ interface PlayerView {
   updated: number;
   moved: number;
   players: number;
-  persuaded: Persuaded;
+  score: Score;
   rank: number | null;
   winners: Leader[];
+  awards: Award[];
+  warmup: WarmMine | null;
+  calibration: [number, number] | null;
   next: number[];
 }
 
@@ -180,6 +256,7 @@ const MODES: Record<Mode, (side: number) => string> = {
 
 const PHASES: Record<Phase, string> = {
   answering: "Answering",
+  warmup: "Warm-up",
   talking: "Talking",
   updating: "Where do you stand now?",
   finished: "Finished",
@@ -211,6 +288,58 @@ function brief(statement: Statement, value: number): string {
 /** Where an answer sits between its two ends, 0 to 1, for colouring. */
 function lean(statement: Statement, value: number): number {
   return statement.chance ? value / 100 : (value - 1) / 6;
+}
+
+/** Bits, signed: "+0.48 bits". */
+function bitsText(bits: number | null): string {
+  if (bits === null) return "no answer";
+  return `${bits >= 0 ? "+" : "−"}${Math.abs(bits).toFixed(2)} bits`;
+}
+
+/** A probability as a whole percent. */
+function pct(p: number): string {
+  return `${Math.round(p * 100)}%`;
+}
+
+/** What somebody's evening came to, in a sentence. */
+function scoreText(score: Score): string {
+  if (!score.total) return "No points yet.";
+  const parts = [
+    score.together ? `${score.together} for closing gaps` : "",
+    score.listening ? `${score.listening} for guessing your partners` : "",
+    score.kudos ? `${score.kudos} × “learned something”` : "",
+  ].filter((part) => part !== "");
+  return `${score.total} points: ${parts.join(", ")}.`;
+}
+
+/** The prizes, as cards. */
+function awardCards(awards: Award[]): HTMLElement {
+  return el(
+    "div",
+    { className: "awards" },
+    ...awards.map((a) =>
+      el(
+        "div",
+        { className: "award" },
+        el("p", { className: "eyebrow" }, a.title),
+        el("p", { className: "award-names" }, a.names.join(" & ")),
+        el("p", { className: "note" }, `${a.why} · ${a.detail}`),
+      ),
+    ),
+  );
+}
+
+/** A 0–100% slider that reports as it moves and sends when let go. */
+function percentSlider(start: number, unset: boolean, onSend: (v: number) => void): [HTMLInputElement, HTMLElement] {
+  const value = el("span", { className: "value big-value" }, unset ? "not answered" : `${start}%`);
+  const input = el("input", { type: "range", min: "0", max: "100", step: "1", className: `scale${unset ? " unset" : ""}` });
+  input.value = String(start);
+  input.addEventListener("input", () => {
+    input.classList.remove("unset");
+    value.textContent = `${input.value}%`;
+  });
+  input.addEventListener("change", () => onSend(Number(input.value)));
+  return [input, value];
 }
 
 /** Runs a countdown off the server's clock into every element given. */
@@ -262,7 +391,7 @@ function start(): void {
   show("start");
   onClick("open", async () => {
     const keys = await api<{ host: string; join: string }>("POST", "/api/rooms");
-    location.href = `/h/${keys.host}`;
+    location.href = here(`/h/${keys.host}`);
   });
   suggestions("suggest-start", "idea-start", "idea-start-chance", "idea-start-done");
 }
@@ -271,6 +400,8 @@ function start(): void {
 
 function host(key: string): void {
   show("host");
+  // The facilitator's screen is usually the one on the wall.
+  document.body.classList.add("wall-screen");
   const at = (path: string): string => `/api/h/${key}${path}`;
   let current: HostView | null = null;
   /** The setup as the facilitator is editing it, before it is sent. */
@@ -380,50 +511,175 @@ function host(key: string): void {
     });
   });
 
-  const gapNote = (g: GroupView): string =>
-    g.statement.chance
-      ? `${g.gap / 2} percentage points apart`
-      : `${plural(Math.round((g.gap * 3) / 100), "step", "steps")} apart`;
+  /** A distance on the shared scale, in the statement's own units. */
+  const gapWords = (statement: Statement, gap: number): string =>
+    statement.chance
+      ? `${Math.round(gap / 2)} points`
+      : plural(Math.round((gap * 3) / 100), "step", "steps");
 
-  const drawGroups = (view: HostView): void => {
-    const box = byId("groups");
-    if (!view.round) {
-      box.replaceChildren();
-      return;
-    }
-    const rows = view.round.groups.map((g) =>
+  const gapNote = (g: GroupView): string => `${gapWords(g.statement, g.gap)} apart`;
+
+  /** One pair, as the wall shows it: where they meet, who, and on what. */
+  const pairCard = (g: GroupView, phase: Phase): HTMLElement =>
+    el(
+      "div",
+      { className: `pair${g.settled ? " settled" : ""}` },
+      el("p", { className: "pair-spot" }, g.spot),
       el(
-        "div",
-        { className: "group" },
-        el("p", { className: "eyebrow" }, `Pair ${g.number} · ${gapNote(g)}`),
-        el("p", { className: "statement" }, g.statement.text),
-        el(
-          "ul",
-          { className: "people" },
-          ...g.people.map((p) =>
-            el(
-              "li",
-              {},
-              el("b", {}, p.name),
-              ` ${said(g.statement, p.before)}`,
-              p.after !== null && p.after !== p.before
-                ? el("span", { className: "moved" }, ` → ${said(g.statement, p.after)}`)
-                : p.after !== null
-                  ? el("span", { className: "note" }, " · unchanged")
-                  : null,
-            ),
-          ),
-        ),
+        "p",
+        { className: "pair-names" },
+        ...g.people.flatMap((p, i) => [
+          i ? " · " : "",
+          el("span", { className: phase === "updating" && p.done ? "done" : "" }, p.name),
+        ]),
+      ),
+      el("p", { className: "pair-statement" }, g.statement.text),
+      el(
+        "p",
+        { className: "note" },
+        g.settled && g.closed !== null
+          ? `${g.people.map((p) => `${said(g.statement, p.before)} → ${said(g.statement, p.after)}`).join(" · ")} · ${
+              g.closed ? `+${g.closed} points each` : "no closer"
+            }`
+          : `${g.people.map((p) => said(g.statement, p.before)).join(" vs ")} · ${gapNote(g)}`,
       ),
     );
-    const waiting = view.round.waiting.length
+
+  /** The room's answers to a warm-up question, as dots along 0–100%. */
+  const dots = (answers: number[], truth: boolean): HTMLElement =>
+    el(
+      "div",
+      { className: "dots" },
+      el("span", { className: `dots-end${truth ? "" : " right"}` }, "0% · false"),
+      el("span", { className: `dots-end${truth ? " right" : ""}` }, "true · 100%"),
+      ...answers.map((a) => {
+        const d = el("i", {});
+        d.style.left = `${a}%`;
+        return d;
+      }),
+    );
+
+  /** The top of the board, large. */
+  const topBoard = (view: HostView, n: number): HTMLElement | null =>
+    view.leaders.length
       ? el(
-          "p",
-          { className: "note" },
-          `Not paired: ${view.round.waiting.join(", ")}. They need to answer statements somebody else has answered.`,
+          "ol",
+          { className: "wall-board" },
+          ...view.leaders.slice(0, n).map((l) =>
+            el("li", {}, el("b", {}, l.name), el("span", {}, `${l.total}`)),
+          ),
         )
       : null;
-    box.replaceChildren(el("h2", {}, `Round ${view.round.number}`), ...rows, waiting ?? "");
+
+  /** The part of the screen meant for the wall, by what is going on. */
+  const drawWall = (view: HostView): void => {
+    const wall = byId("wall");
+    const w = view.warmup;
+    if (view.phase === "warmup" && w) {
+      const o = w.outcome;
+      wall.replaceChildren(
+        el("p", { className: "eyebrow" }, `Warm-up ${w.number} · a question with a right answer`),
+        el("p", { className: "wall-setup" }, w.setup),
+        el("p", { className: "wall-claim" }, w.claim),
+        o
+          ? el(
+              "div",
+              {},
+              el("p", { className: `wall-verdict ${o.truth ? "good" : "poor"}` }, o.truth ? "True" : "False"),
+              dots(o.answers, o.truth),
+              el(
+                "p",
+                { className: "wall-line" },
+                `The room said ${o.mean_before === null ? "–" : `${Math.round(o.mean_before)}%`} before the clues, ${
+                  o.mean_after === null ? "–" : `${Math.round(o.mean_after)}%`
+                } after. The room scored ${bitsText(o.room)} on average; the Bayes bot ${bitsText(o.bot)}.`,
+              ),
+              view.calibrated.length
+                ? el(
+                    "ol",
+                    { className: "wall-board" },
+                    ...view.calibrated.slice(0, 6).map((c) =>
+                      el("li", { className: c.bot ? "bot" : "" }, el("b", {}, c.bot ? "🤖 Bayes bot" : c.name), el("span", {}, bitsText(c.bits))),
+                    ),
+                  )
+                : "",
+            )
+          : el(
+              "p",
+              { className: "wall-line" },
+              w.stage === "before"
+                ? `How likely is it, from the setup alone? ${w.before} of ${plural(view.players.length, "person has", "people have")} answered.`
+                : `Clues are on your phones. Compare with your neighbours, then answer again. ${w.after} of ${view.players.length} answered.`,
+            ),
+      );
+      return;
+    }
+    if (view.round && (view.phase === "talking" || view.phase === "updating")) {
+      const talking = view.phase === "talking";
+      const done = view.round.groups.filter((g) => g.settled).length;
+      wall.replaceChildren(
+        el(
+          "div",
+          { className: "wall-head" },
+          el("p", { className: "eyebrow" }, `Round ${view.round.number}`),
+          talking
+            ? el("p", { className: "clock wall-clock", id: "h-clock" })
+            : el(
+                "p",
+                { className: "wall-line" },
+                `Phones out: guess where your partner landed, say where you stand, and if you learned something. ${done} of ${plural(view.round.groups.length, "pair", "pairs")} done.`,
+              ),
+        ),
+        el("div", { className: "pairs" }, ...view.round.groups.map((g) => pairCard(g, view.phase))),
+        view.round.waiting.length
+          ? el("p", { className: "note" }, `Not paired: ${view.round.waiting.join(", ")}. They need to answer statements somebody else has answered.`)
+          : "",
+      );
+      return;
+    }
+    if (view.phase === "finished") {
+      wall.replaceChildren(
+        el("p", { className: "eyebrow" }, "That was the evening"),
+        el("h1", {}, "The prizes"),
+        view.awards.length ? awardCards(view.awards) : el("p", { className: "note" }, "No prizes: nobody finished a round."),
+        topBoard(view, 5) ? el("h2", {}, "Most points") : "",
+        topBoard(view, 5) ?? "",
+      );
+      return;
+    }
+    wall.replaceChildren(
+      el("p", { className: "eyebrow" }, view.rounds ? `After round ${view.rounds}` : "Speed updating"),
+      el("p", { className: "wall-claim" }, view.rounds ? "Answer a few more, the next round is coming" : "Scan the code and say where you stand"),
+      el(
+        "p",
+        { className: "wall-line" },
+        `${plural(view.players.length, "person", "people")} in, ${plural(view.answers, "answer", "answers")} so far.`,
+      ),
+      topBoard(view, 5) ?? "",
+    );
+  };
+
+  /** The facilitator's buttons, kept to one bar. */
+  const drawControls = (view: HostView): void => {
+    const talking = view.phase === "talking";
+    const warm = view.phase === "warmup" ? view.warmup : null;
+    text("h-phase", warm ? `Warm-up ${warm.number}` : PHASES[view.phase]);
+    byId("start").textContent = view.rounds ? `Start round ${view.rounds + 1}` : "Start the first round";
+    hide("start", talking || view.phase === "finished" || warm !== null);
+    hide("stop", !talking);
+    hide("extend", !(talking || (view.phase === "updating" && view.rounds > 0)));
+    hide("finish", view.phase === "finished" || warm !== null);
+    hide("reopen", view.phase !== "finished");
+    hide("warm-start", !(view.phase === "answering" || (warm !== null && warm.stage === "revealed")));
+    byId("warm-start").textContent = warm ? "Next warm-up question" : view.warmups ? "Another warm-up question" : "Warm-up question";
+    hide("warm-next", warm === null || warm.stage === "revealed");
+    byId("warm-next").textContent = warm?.stage === "before" ? "Deal the clues" : "Reveal the answer";
+    hide("warm-end", warm === null);
+    chips<number>(
+      "lengths",
+      view.lengths.map((m) => ({ value: m, label: `${m} min`, on: m === view.minutes })),
+      (minutes) => void send("PUT", "/minutes", { minutes }).catch((e: unknown) => fail(String(e))),
+    );
   };
 
   const tallyList = (title: string, tallies: Tally[], line: (t: Tally) => string): HTMLElement | null =>
@@ -469,7 +725,7 @@ function host(key: string): void {
               el("th", {}, "Name"),
               el("th", {}, "Answered"),
               el("th", {}, "Updated"),
-              el("th", {}, "Moved others"),
+              el("th", {}, "Points"),
               view.mode === "bingo" ? el("th", {}, "Lines") : null,
             ),
           ),
@@ -483,7 +739,7 @@ function host(key: string): void {
                 el("td", {}, p.name),
                 el("td", {}, `${p.answered} of ${p.of}`),
                 el("td", {}, String(p.updated)),
-                el("td", {}, String(p.persuaded.points)),
+                el("td", {}, String(p.score.total)),
                 view.mode === "bingo" ? el("td", {}, p.lines ? `${p.lines} 🎉` : "0") : null,
               ),
             ),
@@ -497,11 +753,11 @@ function host(key: string): void {
       ? el(
           "section",
           { className: "panel" },
-          el("h2", {}, view.phase === "finished" ? "Who changed the most minds" : "Changing minds so far"),
+          el("h2", {}, "Points so far"),
           el(
             "p",
             { className: "note" },
-            "Points are how far partners moved towards somebody's answer after talking to them. Moving yourself scores nothing for you.",
+            `Points for the gap closed with a partner (the same for both, whoever moved), for guessing where a partner landed (up to 100 a guess), and ${view.kudos_points} each time a partner learned something.`,
           ),
           el(
             "ol",
@@ -510,8 +766,8 @@ function host(key: string): void {
               el(
                 "li",
                 { className: i === 0 ? "first" : "" },
-                el("span", {}, el("b", {}, l.name), i === 0 && view.phase === "finished" ? " 🏆" : ""),
-                el("small", {}, `${l.points} points, ${plural(l.people, "person", "people")} moved`),
+                el("span", {}, el("b", {}, l.name)),
+                el("small", {}, scoreText(l)),
               ),
             ),
           ),
@@ -541,7 +797,9 @@ function host(key: string): void {
   const draw = (view: HostView): void => {
     current = view;
     showJoin(view.join);
-    byId("room").classList.toggle("tight", view.phase !== "answering");
+    // The code is the main thing on the wall until the first round; after
+    // that it shrinks to a corner for latecomers.
+    byId("room").classList.toggle("tight", view.rounds > 0 || view.phase !== "answering");
     text(
       "who",
       view.players.length
@@ -550,22 +808,8 @@ function host(key: string): void {
     );
     text("where", view.rounds ? `Round ${view.rounds}` : "");
     drawSetup(view);
-
-    text("h-phase", PHASES[view.phase]);
-    chips<number>(
-      "lengths",
-      view.lengths.map((m) => ({ value: m, label: `${m}`, on: m === view.minutes })),
-      (minutes) => void send("PUT", "/minutes", { minutes }).catch((e: unknown) => fail(String(e))),
-    );
-    const talking = view.phase === "talking";
-    byId("start").textContent = view.rounds ? `Start round ${view.rounds + 1}` : "Start the first round";
-    hide("start", talking || view.phase === "finished");
-    hide("stop", !talking);
-    hide("extend", !(talking || (view.phase === "updating" && view.rounds > 0)));
-    hide("finish", view.phase === "finished");
-    hide("reopen", view.phase !== "finished");
-    hide("h-clock", !talking);
-    drawGroups(view);
+    drawWall(view);
+    drawControls(view);
     drawBoard(view);
   };
 
@@ -574,12 +818,22 @@ function host(key: string): void {
   onClick("extend", () => send("POST", "/extend"));
   onClick("finish", () => send("POST", "/finish"));
   onClick("reopen", () => send("POST", "/reopen"));
+  onClick("warm-start", async () => {
+    // From a revealed question, "next" ends it and asks another.
+    if (current?.phase === "warmup") await send("POST", "/warmup/end");
+    await send("POST", "/warmup");
+  });
+  onClick("warm-next", () => send("POST", "/warmup/next"));
+  onClick("warm-end", () => send("POST", "/warmup/end"));
 
   const feed = watch<HostView>(at(""), draw);
   ticking(
     feed.now,
     () => (current && current.phase === "talking" ? current.ends : null),
-    () => [byId("h-clock")],
+    () => {
+      const c = document.getElementById("h-clock");
+      return c ? [c] : [];
+    },
   );
 }
 
@@ -591,6 +845,8 @@ interface Row {
   box: HTMLElement;
   slider: HTMLInputElement;
   value: HTMLElement;
+  /** Says whether the answer is in. */
+  tag: HTMLElement;
   mark: HTMLButtonElement | null;
   /** In the free mode: how many answered, and who once you have. */
   crowd: HTMLElement | null;
@@ -613,8 +869,32 @@ function player(key: string): void {
     fail("");
   };
 
+  /** What was sent last, so the thing showing it can move once. */
+  let justSent: string | null = null;
+  const pulse = <T extends HTMLElement>(key: string, node: T): T => {
+    if (justSent === key) landed(node);
+    return node;
+  };
+  /** Takes a reply to a send and redraws with it, even when the room's
+   *  stream got there first, so the confirmation always shows. */
+  const sentAs = (key: string, r: { now: number; view: PlayerView }): void => {
+    justSent = key;
+    accept(r);
+    if (current) draw(current);
+    justSent = null;
+  };
+
   const answer = async (id: number, value: number | null): Promise<void> => {
-    accept(await api("PUT", at("/answer"), { id, value }));
+    const r = await api<{ now: number; view: PlayerView }>("PUT", at("/answer"), { id, value });
+    sentAs(`s${id}`, r);
+  };
+
+  /** Whether a statement's answer is in: always open to change until the
+   *  evening ends. */
+  const tagFor = (tag: HTMLElement, answered: boolean, finished: boolean): void => {
+    tag.className = `sent-tag${answered ? " in" : ""}`;
+    tag.textContent = !answered ? "" : finished ? "🔒 Final" : "✓ Sent";
+    tag.title = answered && !finished ? "Sent when you let go. You can change it whenever you like." : "";
   };
 
   const markIt = async (id: number, marked: boolean): Promise<void> => {
@@ -665,6 +945,7 @@ function player(key: string): void {
     const make = (sq: Square): HTMLElement => {
       const s = sq.statement;
       const value = el("span", { className: "value" }, said(s, sq.answer));
+      const tag = el("span", {});
       const input = slider(s, (v) => run(answer(s.id, v)), value);
       const clear = el("button", { type: "button", className: "chip small" }, "Clear");
       clear.addEventListener("click", () => run(answer(s.id, null)));
@@ -687,11 +968,11 @@ function player(key: string): void {
         ),
         input,
         ends(s),
-        el("div", { className: "row-foot" }, value, el("span", {}, mark ?? "", clear)),
+        el("div", { className: "row-foot" }, el("span", {}, value, " ", tag), el("span", {}, mark ?? "", clear)),
       );
       const crowd = view.mode === "free" ? el("p", { className: "crowd" }) : null;
       if (crowd) box.append(crowd);
-      rows.set(s.id, { box, slider: input, value, mark, crowd, statement: s });
+      rows.set(s.id, { box, slider: input, value, tag, mark, crowd, statement: s });
       return box;
     };
 
@@ -702,7 +983,7 @@ function player(key: string): void {
           "section",
           { className: "panel" },
           el("h2", {}, "Where do you stand?"),
-          el("p", { className: "note" }, "Drag each slider. You can change an answer whenever you like."),
+          el("p", { className: "note" }, "Drag each slider: an answer is sent when you let go, and you can change it whenever you like."),
           ...view.squares.map(make),
         ),
       );
@@ -786,6 +1067,7 @@ function player(key: string): void {
   let cardCrowd: HTMLElement | null = null;
   let cardNext: HTMLButtonElement | null = null;
   let cardCount: HTMLElement | null = null;
+  let cardTag: HTMLElement | null = null;
 
   const pick = (view: PlayerView): void => {
     card = view.next.find((id) => id !== card) ?? null;
@@ -846,7 +1128,7 @@ function player(key: string): void {
         ),
         cardSlider,
         ends(s),
-        el("div", { className: "row-foot" }, cardValue),
+        el("div", { className: "row-foot" }, el("span", {}, cardValue, " ", (cardTag = el("span", {})))),
         cardCrowd,
         el("div", { className: "actions" }, skip, cardNext),
       );
@@ -857,6 +1139,10 @@ function player(key: string): void {
       if (cardValue) cardValue.textContent = said(sq.statement, sq.answer);
     }
     if (cardCrowd) cardCrowd.textContent = crowdText(sq);
+    if (cardTag) {
+      tagFor(cardTag, sq.answer !== null, false);
+      pulse(`s${sq.statement.id}`, cardTag);
+    }
     if (cardCount) cardCount.textContent = `Quick fire · ${answered} answered`;
     if (cardNext) cardNext.disabled = sq.answer === null;
   };
@@ -958,16 +1244,212 @@ function player(key: string): void {
     );
   };
 
+  /** A guess being dragged but not yet locked in, by partner. */
+  const guessDraft = new Map<string, number>();
+
+  const sendGuess = async (name: string, value: number): Promise<void> => {
+    const r = await api<{ now: number; view: PlayerView }>("PUT", at("/guess"), { name, value });
+    sentAs(`guess:${name}`, r);
+  };
+
+  const sendKudos = async (name: string, given: boolean): Promise<void> => {
+    accept(await api("PUT", at("/kudos"), { name, given }));
+  };
+
+  const sendWarm = async (value: number): Promise<void> => {
+    const r = await api<{ now: number; view: PlayerView }>("PUT", at("/warm"), { value });
+    sentAs("warm", r);
+  };
+
+  /** A calibration question: before the clue, with it, and the answer. */
+  const drawWarm = (box: HTMLElement, view: PlayerView, w: WarmMine): void => {
+    const head = [
+      el("p", { className: "eyebrow" }, `Warm-up ${w.number} · a question with a right answer`),
+      el("p", { className: "note" }, w.setup),
+      el("p", { className: "statement big-statement" }, w.claim),
+    ];
+    if (w.stage === "revealed" && w.result) {
+      const r = w.result;
+      const lines = [
+        `Before your clue you said ${w.before === null ? "nothing" : `${w.before}%`}: ${bitsText(r.bits_before)}.`,
+        `After it you said ${w.after === null ? "nothing" : `${w.after}%`}: ${bitsText(r.bits_after)}.`,
+        `${w.clue ?? ""} From the start the setup gives, Bayes says ${pct(r.ideal)} after that clue${
+          r.ideal_from_yours === null ? "" : `, and ${pct(r.ideal_from_yours)} from where you started`
+        }.`,
+      ];
+      box.replaceChildren(
+        ...head,
+        el("p", { className: `verdict-line ${r.truth ? "good" : "poor"}` }, r.truth ? "It was true." : "It was false."),
+        ...lines.map((line) => el("p", { className: "note" }, line)),
+        view.calibration
+          ? el(
+              "p",
+              {},
+              `Your warm-up so far: ${bitsText(view.calibration[0])}. The Bayes bot: ${bitsText(view.calibration[1])}.`,
+            )
+          : "",
+        el(
+          "p",
+          { className: "note" },
+          "Bits against a coin flip: 50% scores nothing, sure and right nearly a bit, sure and wrong costs a lot. Saying what you believe is the best you can do.",
+        ),
+      );
+      return;
+    }
+    const clue = w.stage === "clue";
+    const current = clue ? w.after : w.before;
+    const [input, value] = percentSlider(current ?? (clue ? w.before ?? 50 : 50), current === null, (v) =>
+      run(sendWarm(v)),
+    );
+    box.replaceChildren(
+      ...head,
+      clue && w.clue ? el("p", { className: "clue" }, `Your clue: ${w.clue}`) : "",
+      el(
+        "h3",
+        {},
+        clue ? "How likely is it now?" : "How likely is it, before any clue?",
+      ),
+      el(
+        "p",
+        { className: "note" },
+        clue
+          ? "Other people have different clues. Compare with the people near you if you like, then answer."
+          : "Everybody has a clue coming. First say how likely it is from the setup alone.",
+      ),
+      input,
+      el("div", { className: "ends" }, el("span", {}, "0% · surely false"), el("span", {}, "surely true · 100%")),
+      el("div", { className: "row-foot" }, value),
+      clue && w.before !== null ? el("p", { className: "note" }, `Your answer before the clue, ${w.before}%, is locked in.`) : "",
+      pulse(
+        "warm",
+        current === null
+          ? sentBox("waiting", "Not sent yet", "Move the slider. Your answer is sent when you let go.")
+          : sentBox(
+              "sent",
+              `✓ Sent: ${current}%`,
+              clue
+                ? "You can still change it until the host reveals the answer."
+                : "You can still change it until the host deals the clues.",
+            ),
+      ),
+    );
+  };
+
+  /** After a round: guess your partner, say where you stand, and thank. */
+  const drawAfter = (box: HTMLElement, view: PlayerView, g: Mine): void => {
+    const s = g.statement;
+    const guesses = g.partners.map((p) => {
+      if (p.guess !== null) {
+        const landed =
+          p.after === null
+            ? `${p.name} has not said yet.`
+            : `${p.name} says ${said(s, p.after)}.`;
+        return el(
+          "div",
+          { className: "step done" },
+          pulse(`guess:${p.name}`, sentBox("locked", `🔒 Your guess for ${p.name}: ${said(s, p.guess)}`, landed)),
+        );
+      }
+      const draft = guessDraft.get(p.name) ?? p.answer;
+      const value = el("span", { className: "value" }, said(s, draft));
+      const input = el("input", {
+        type: "range",
+        min: s.chance ? "0" : "1",
+        max: s.chance ? "100" : "7",
+        step: "1",
+        className: "scale",
+      });
+      input.value = String(draft);
+      input.addEventListener("pointerdown", () => {
+        holding = input;
+      });
+      input.addEventListener("input", () => {
+        guessDraft.set(p.name, Number(input.value));
+        value.textContent = said(s, Number(input.value));
+      });
+      input.addEventListener("change", () => {
+        holding = null;
+      });
+      const lock = el("button", { type: "button", className: "button primary" }, `Lock in my guess`);
+      lock.addEventListener("click", () => run(sendGuess(p.name, Number(input.value))));
+      return el(
+        "div",
+        { className: "step" },
+        el("p", {}, el("b", {}, `Where do you think ${p.name} stands now?`), ` They started at ${said(s, p.answer)}.`),
+        input,
+        ends(s),
+        el("div", { className: "row-foot" }, value),
+        sentBox(
+          "waiting",
+          "Not locked in yet",
+          "Your guess counts once you press Lock in, and cannot be changed after that. You see their answer once it is in; the closer, the more points.",
+        ),
+        el("div", { className: "actions" }, lock),
+      );
+    });
+
+    const mineValue = el("span", { className: "value" }, said(s, g.after ?? g.before));
+    const mine = slider(s, (v) => run(answer(s.id, v)), mineValue);
+    mine.value = String(g.after ?? g.before);
+    mine.classList.remove("unset");
+    const same = el("button", { type: "button", className: "button" }, "Where I was");
+    same.addEventListener("click", () => run(answer(s.id, g.before)));
+    const standing = pulse(
+      `s${s.id}`,
+      g.after === null
+        ? sentBox("waiting", "Not sent yet", "Move the slider, or press Where I was. It is sent when you let go.")
+        : sentBox("sent", `✓ Sent: ${said(s, g.after)}`, "You can still change it until the host starts the next round."),
+    );
+
+    const thanks = g.partners.map((p) => {
+      const b = el(
+        "button",
+        { type: "button", className: `chip${p.kudos ? " on" : ""}` },
+        p.kudos ? `✓ I learned something from ${p.name}` : `I learned something from ${p.name}`,
+      );
+      b.setAttribute("aria-pressed", String(p.kudos));
+      b.addEventListener("click", () => run(sendKudos(p.name, !p.kudos)));
+      return b;
+    });
+
+    box.replaceChildren(
+      el("p", { className: "eyebrow" }, `Round ${view.round} is over · ${g.spot}`),
+      el("h2", {}, "Before you go"),
+      el("p", { className: "statement" }, s.text),
+      el("h3", {}, "1. Guess"),
+      ...guesses,
+      el("h3", {}, "2. Where do you stand now?"),
+      el("p", { className: "note" }, `You started at ${said(s, g.before)}.`),
+      mine,
+      ends(s),
+      el("div", { className: "row-foot" }, mineValue),
+      standing,
+      el("div", { className: "actions" }, same),
+      el("h3", {}, "3. Did you learn something?"),
+      el("div", { className: "chips" }, ...thanks),
+      el(
+        "p",
+        { className: "note" },
+        "Points come from closing the gap between you, whoever moved, from guessing well, and from partners who learned something from you.",
+      ),
+    );
+  };
+
   const drawNow = (view: PlayerView): void => {
     const box = byId("now");
     const g = view.group;
+    if (view.phase === "warmup" && view.warmup) {
+      drawWarm(box, view, view.warmup);
+      return;
+    }
     if (view.phase === "talking" && g) {
       const s = g.statement;
       box.replaceChildren(
-        el("p", { className: "eyebrow" }, `Round ${view.round} · pair ${g.number}`),
+        el("p", { className: "eyebrow" }, `Round ${view.round}`),
         el("p", { className: "clock", id: "p-clock" }),
-        el("p", { className: "note" }, "Go and find"),
-        el("p", { className: "big" }, g.partners.map((p) => p.name).join(" and ")),
+        el("p", { className: "note" }, "Meet at"),
+        el("p", { className: "spot" }, g.spot),
+        el("p", { className: "big" }, `with ${g.partners.map((p) => p.name).join(" and ")}`),
         el("p", { className: "statement" }, s.text),
         el(
           "div",
@@ -980,44 +1462,13 @@ function player(key: string): void {
         el(
           "p",
           { className: "note" },
-          "Take turns saying why you think what you think. Look for what would change your mind, not for how to win.",
+          "Take turns saying why you think what you think. Look for what would change your mind, not for how to win. Afterwards you guess where your partner landed.",
         ),
       );
       return;
     }
     if (view.phase === "updating" && g) {
-      const s = g.statement;
-      const value = el("span", { className: "value" }, said(s, g.after ?? g.before));
-      const input = slider(s, (v) => run(answer(s.id, v)), value);
-      input.value = String(g.after ?? g.before);
-      input.classList.remove("unset");
-      const same = el("button", { type: "button", className: "button" }, "Where I was");
-      same.addEventListener("click", () => run(answer(s.id, g.before)));
-      const partners = g.partners
-        .filter((p) => p.after !== null)
-        .map((p) => `${p.name}: ${said(s, p.answer)} → ${said(s, p.after)}`);
-      box.replaceChildren(
-        el("p", { className: "eyebrow" }, `Round ${view.round} is over`),
-        el("h2", {}, "How much did that change your mind?"),
-        el("p", { className: "statement" }, s.text),
-        el("p", { className: "note" }, `Before: ${said(s, g.before)}.`),
-        input,
-        ends(s),
-        el("div", { className: "row-foot" }, value),
-        el("div", { className: "actions" }, same),
-        g.after !== null
-          ? el(
-              "p",
-              { className: g.after !== g.before ? "good" : "note" },
-              g.after !== g.before ? "Updated. Thank you." : "Kept. That is an answer too.",
-            )
-          : el(
-              "p",
-              { className: "note" },
-              "Move the slider to where you stand now, or keep where you were. Coming towards your partner scores for them, not you, so be honest.",
-            ),
-        partners.length ? el("p", { className: "note" }, partners.join(" · ")) : "",
-      );
+      drawAfter(box, view, g);
       return;
     }
     if (view.waiting) {
@@ -1036,16 +1487,17 @@ function player(key: string): void {
       box.replaceChildren(
         el("p", { className: "eyebrow" }, "That was the evening"),
         el("h2", {}, view.updated ? `You updated on ${plural(view.updated, "statement", "statements")}` : "You held your ground"),
-        el(
-          "p",
-          { className: "note" },
-          `Your answers moved ${view.moved} points in total since you first gave them. You moved the people you talked to ${view.persuaded.points} points${view.rank ? `, which is place ${view.rank} in the room` : ""}.`,
-        ),
+        el("p", {}, scoreText(view.score) + (view.rank ? ` Place ${view.rank} in the room.` : "")),
+        view.calibration
+          ? el("p", { className: "note" }, `Warm-up: ${bitsText(view.calibration[0])}, against the Bayes bot's ${bitsText(view.calibration[1])}.`)
+          : "",
+        view.awards.length ? el("h3", {}, "The prizes") : "",
+        view.awards.length ? awardCards(view.awards) : "",
         view.winners.length
           ? el(
               "div",
               {},
-              el("h3", {}, "Who changed the most minds"),
+              el("h3", {}, "Most points"),
               el(
                 "ol",
                 { className: "tallies leaders" },
@@ -1054,7 +1506,7 @@ function player(key: string): void {
                     "li",
                     { className: i === 0 ? "first" : "" },
                     el("span", {}, el("b", {}, l.name), i === 0 ? " 🏆" : ""),
-                    el("small", {}, `${l.points} points, ${plural(l.people, "person", "people")} moved`),
+                    el("small", {}, `${l.total} points`),
                   ),
                 ),
               ),
@@ -1066,20 +1518,12 @@ function player(key: string): void {
     box.replaceChildren(
       el("p", { className: "eyebrow" }, view.round ? `Between rounds` : "Answering"),
       el("h2", {}, view.round ? "Waiting for the next round" : "Say where you stand"),
-      view.round
-        ? el(
-            "p",
-            { className: "note" },
-            view.persuaded.points
-              ? `You have moved the people you talked to ${view.persuaded.points} points so far${view.rank ? `: place ${view.rank} in the room` : ""}.`
-              : "Nobody has moved towards you yet. The next round is another chance.",
-          )
-        : "",
+      view.round ? el("p", { className: "note" }, scoreText(view.score) + (view.rank ? ` Place ${view.rank} in the room.` : "")) : "",
       el(
         "p",
         { className: "note" },
         view.mode === "bingo"
-          ? "Answer the statements on your card. When a round starts you are paired with whoever disagrees with you most."
+          ? "Answer the statements on your card. When a round starts you are paired with whoever disagrees with you most, preferring statements that get you closer to a bingo line."
           : view.mode === "free"
             ? "Browse and answer whatever you have a view on. The more people answer the same statements, the better the matches below get: go and talk to whoever disagrees with you most."
             : "Answer the statements you have a view on. When a round starts you are paired with whoever disagrees with you most.",
@@ -1127,6 +1571,8 @@ function player(key: string): void {
         row.slider.classList.toggle("unset", sq.answer === null);
         row.value.textContent = said(sq.statement, sq.answer);
       }
+      tagFor(row.tag, sq.answer !== null, finished);
+      pulse(`s${sq.statement.id}`, row.tag);
       if (row.mark) row.mark.setAttribute("aria-pressed", String(sq.marked));
       if (row.crowd) row.crowd.textContent = crowdText(sq);
       row.box.classList.toggle("answered", sq.answer !== null);
@@ -1152,15 +1598,18 @@ function player(key: string): void {
       view.updated,
       view.moved,
       view.mode,
-      view.persuaded,
+      view.score,
       view.rank,
       view.winners,
+      view.awards,
+      view.warmup,
+      view.calibration,
     ]);
-    if (nowKey !== drawnNow || !byId("now").contains(holding)) {
-      if (nowKey !== drawnNow) {
-        drawnNow = nowKey;
-        drawNow(view);
-      }
+    // Not while a slider in it is under a finger: it is drawn again when
+    // the finger lets go and the next update arrives.
+    if (nowKey !== drawnNow && !byId("now").contains(holding)) {
+      drawnNow = nowKey;
+      drawNow(view);
     }
     drawOpposites(view);
     drawGrid(view);
