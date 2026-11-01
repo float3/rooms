@@ -14,10 +14,12 @@ import {
   failed,
   hide,
   joining,
+  landed,
   onClick,
   onSubmit,
   plural,
   route,
+  sentBox,
   show,
   showJoin,
   text,
@@ -843,6 +845,8 @@ interface Row {
   box: HTMLElement;
   slider: HTMLInputElement;
   value: HTMLElement;
+  /** Says whether the answer is in. */
+  tag: HTMLElement;
   mark: HTMLButtonElement | null;
   /** In the free mode: how many answered, and who once you have. */
   crowd: HTMLElement | null;
@@ -865,8 +869,32 @@ function player(key: string): void {
     fail("");
   };
 
+  /** What was sent last, so the thing showing it can move once. */
+  let justSent: string | null = null;
+  const pulse = <T extends HTMLElement>(key: string, node: T): T => {
+    if (justSent === key) landed(node);
+    return node;
+  };
+  /** Takes a reply to a send and redraws with it, even when the room's
+   *  stream got there first, so the confirmation always shows. */
+  const sentAs = (key: string, r: { now: number; view: PlayerView }): void => {
+    justSent = key;
+    accept(r);
+    if (current) draw(current);
+    justSent = null;
+  };
+
   const answer = async (id: number, value: number | null): Promise<void> => {
-    accept(await api("PUT", at("/answer"), { id, value }));
+    const r = await api<{ now: number; view: PlayerView }>("PUT", at("/answer"), { id, value });
+    sentAs(`s${id}`, r);
+  };
+
+  /** Whether a statement's answer is in: always open to change until the
+   *  evening ends. */
+  const tagFor = (tag: HTMLElement, answered: boolean, finished: boolean): void => {
+    tag.className = `sent-tag${answered ? " in" : ""}`;
+    tag.textContent = !answered ? "" : finished ? "🔒 Final" : "✓ Sent";
+    tag.title = answered && !finished ? "Sent when you let go. You can change it whenever you like." : "";
   };
 
   const markIt = async (id: number, marked: boolean): Promise<void> => {
@@ -917,6 +945,7 @@ function player(key: string): void {
     const make = (sq: Square): HTMLElement => {
       const s = sq.statement;
       const value = el("span", { className: "value" }, said(s, sq.answer));
+      const tag = el("span", {});
       const input = slider(s, (v) => run(answer(s.id, v)), value);
       const clear = el("button", { type: "button", className: "chip small" }, "Clear");
       clear.addEventListener("click", () => run(answer(s.id, null)));
@@ -939,11 +968,11 @@ function player(key: string): void {
         ),
         input,
         ends(s),
-        el("div", { className: "row-foot" }, value, el("span", {}, mark ?? "", clear)),
+        el("div", { className: "row-foot" }, el("span", {}, value, " ", tag), el("span", {}, mark ?? "", clear)),
       );
       const crowd = view.mode === "free" ? el("p", { className: "crowd" }) : null;
       if (crowd) box.append(crowd);
-      rows.set(s.id, { box, slider: input, value, mark, crowd, statement: s });
+      rows.set(s.id, { box, slider: input, value, tag, mark, crowd, statement: s });
       return box;
     };
 
@@ -954,7 +983,7 @@ function player(key: string): void {
           "section",
           { className: "panel" },
           el("h2", {}, "Where do you stand?"),
-          el("p", { className: "note" }, "Drag each slider. You can change an answer whenever you like."),
+          el("p", { className: "note" }, "Drag each slider: an answer is sent when you let go, and you can change it whenever you like."),
           ...view.squares.map(make),
         ),
       );
@@ -1038,6 +1067,7 @@ function player(key: string): void {
   let cardCrowd: HTMLElement | null = null;
   let cardNext: HTMLButtonElement | null = null;
   let cardCount: HTMLElement | null = null;
+  let cardTag: HTMLElement | null = null;
 
   const pick = (view: PlayerView): void => {
     card = view.next.find((id) => id !== card) ?? null;
@@ -1098,7 +1128,7 @@ function player(key: string): void {
         ),
         cardSlider,
         ends(s),
-        el("div", { className: "row-foot" }, cardValue),
+        el("div", { className: "row-foot" }, el("span", {}, cardValue, " ", (cardTag = el("span", {})))),
         cardCrowd,
         el("div", { className: "actions" }, skip, cardNext),
       );
@@ -1109,6 +1139,10 @@ function player(key: string): void {
       if (cardValue) cardValue.textContent = said(sq.statement, sq.answer);
     }
     if (cardCrowd) cardCrowd.textContent = crowdText(sq);
+    if (cardTag) {
+      tagFor(cardTag, sq.answer !== null, false);
+      pulse(`s${sq.statement.id}`, cardTag);
+    }
     if (cardCount) cardCount.textContent = `Quick fire · ${answered} answered`;
     if (cardNext) cardNext.disabled = sq.answer === null;
   };
@@ -1214,7 +1248,8 @@ function player(key: string): void {
   const guessDraft = new Map<string, number>();
 
   const sendGuess = async (name: string, value: number): Promise<void> => {
-    accept(await api("PUT", at("/guess"), { name, value }));
+    const r = await api<{ now: number; view: PlayerView }>("PUT", at("/guess"), { name, value });
+    sentAs(`guess:${name}`, r);
   };
 
   const sendKudos = async (name: string, given: boolean): Promise<void> => {
@@ -1222,7 +1257,8 @@ function player(key: string): void {
   };
 
   const sendWarm = async (value: number): Promise<void> => {
-    accept(await api("PUT", at("/warm"), { value }));
+    const r = await api<{ now: number; view: PlayerView }>("PUT", at("/warm"), { value });
+    sentAs("warm", r);
   };
 
   /** A calibration question: before the clue, with it, and the answer. */
@@ -1282,7 +1318,20 @@ function player(key: string): void {
       ),
       input,
       el("div", { className: "ends" }, el("span", {}, "0% · surely false"), el("span", {}, "surely true · 100%")),
-      el("div", { className: "row-foot" }, value, el("span", { className: "note" }, current === null ? "" : "Sent. You can still change it.")),
+      el("div", { className: "row-foot" }, value),
+      clue && w.before !== null ? el("p", { className: "note" }, `Your answer before the clue, ${w.before}%, is locked in.`) : "",
+      pulse(
+        "warm",
+        current === null
+          ? sentBox("waiting", "Not sent yet", "Move the slider. Your answer is sent when you let go.")
+          : sentBox(
+              "sent",
+              `✓ Sent: ${current}%`,
+              clue
+                ? "You can still change it until the host reveals the answer."
+                : "You can still change it until the host deals the clues.",
+            ),
+      ),
     );
   };
 
@@ -1298,7 +1347,7 @@ function player(key: string): void {
         return el(
           "div",
           { className: "step done" },
-          el("p", {}, el("b", {}, `Your guess for ${p.name}: ${said(s, p.guess)}. `), landed),
+          pulse(`guess:${p.name}`, sentBox("locked", `🔒 Your guess for ${p.name}: ${said(s, p.guess)}`, landed)),
         );
       }
       const draft = guessDraft.get(p.name) ?? p.answer;
@@ -1330,8 +1379,12 @@ function player(key: string): void {
         input,
         ends(s),
         el("div", { className: "row-foot" }, value),
+        sentBox(
+          "waiting",
+          "Not locked in yet",
+          "Your guess counts once you press Lock in, and cannot be changed after that. You see their answer once it is in; the closer, the more points.",
+        ),
         el("div", { className: "actions" }, lock),
-        el("p", { className: "note" }, "You see their answer once your guess is in. The closer, the more points."),
       );
     });
 
@@ -1341,6 +1394,12 @@ function player(key: string): void {
     mine.classList.remove("unset");
     const same = el("button", { type: "button", className: "button" }, "Where I was");
     same.addEventListener("click", () => run(answer(s.id, g.before)));
+    const standing = pulse(
+      `s${s.id}`,
+      g.after === null
+        ? sentBox("waiting", "Not sent yet", "Move the slider, or press Where I was. It is sent when you let go.")
+        : sentBox("sent", `✓ Sent: ${said(s, g.after)}`, "You can still change it until the host starts the next round."),
+    );
 
     const thanks = g.partners.map((p) => {
       const b = el(
@@ -1363,7 +1422,8 @@ function player(key: string): void {
       el("p", { className: "note" }, `You started at ${said(s, g.before)}.`),
       mine,
       ends(s),
-      el("div", { className: "row-foot" }, mineValue, g.after !== null ? el("span", { className: "note" }, "Sent") : ""),
+      el("div", { className: "row-foot" }, mineValue),
+      standing,
       el("div", { className: "actions" }, same),
       el("h3", {}, "3. Did you learn something?"),
       el("div", { className: "chips" }, ...thanks),
@@ -1511,6 +1571,8 @@ function player(key: string): void {
         row.slider.classList.toggle("unset", sq.answer === null);
         row.value.textContent = said(sq.statement, sq.answer);
       }
+      tagFor(row.tag, sq.answer !== null, finished);
+      pulse(`s${sq.statement.id}`, row.tag);
       if (row.mark) row.mark.setAttribute("aria-pressed", String(sq.marked));
       if (row.crowd) row.crowd.textContent = crowdText(sq);
       row.box.classList.toggle("answered", sq.answer !== null);

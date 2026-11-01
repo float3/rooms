@@ -533,3 +533,19 @@ body.wall-screen main {
 #now h3 {
   margin-top: 18px;
 }
+
+/* Next to a statement's answer: whether it is in. */
+.sent-tag {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--body);
+}
+
+.sent-tag.in {
+  color: var(--mark);
+}
+
+.sent-tag.just {
+  animation: landed 0.6s ease-out;
+}
