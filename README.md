@@ -44,6 +44,30 @@ impl Room for Lobby {
 that runs out of time. it returns whether anything changed, so a watcher
 is only sent an update when there is one.
 
+## one room for every game
+
+`hall/` is a server that runs [numbers](https://github.com/float3/numbers),
+[estimate](https://github.com/float3/estimate) and
+[updating](https://github.com/float3/updating) together, each under its
+own path, with a room of its own on top. The room has one join link and
+one QR code for the whole evening. The host picks a game; the hall opens
+a room in it, or goes back to the one it opened earlier, and joins
+everybody in by name. Each phone shows the current game in a frame, and
+the frame follows the host to the next game. Somebody who joins in the
+middle of a game is put straight into it.
+
+```sh
+nix develop --command cargo run -p rooms-hall
+```
+
+listens on `127.0.0.1:8103` (`HALL_ADDR`) and keeps the halls and every
+game's rooms in the directory `HALL_STATE`, one JSON file each. the flake
+has a NixOS module for it, `services.rooms-hall`, with the same sandbox
+as the games on their own.
+
+petrov is not in it: a Petrov Day game is two countries with a link
+each, not a host and a room of players.
+
 ## the browser code
 
 `rooms-client` is the second crate. it holds the TypeScript and the

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="A door with three dots, one for each game">
+  <rect width="64" height="64" rx="12" fill="#183c32"/>
+  <rect x="20" y="12" width="24" height="40" rx="3" fill="none" stroke="#f8f7f2" stroke-width="4"/>
+  <circle cx="26" cy="32" r="3.5" fill="#f8f7f2"/>
+  <circle cx="32" cy="32" r="3.5" fill="#859264"/>
+  <circle cx="38" cy="32" r="3.5" fill="#dcb96c"/>
+</svg>

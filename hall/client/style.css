@@ -1,0 +1,169 @@
+/* The hall's own rules. The rest is rooms.css. */
+
+/* The host's screen is usually on a wall, so it gets the whole width. */
+body.wide main {
+  width: min(1280px, calc(100% - 28px));
+}
+
+/* The lobby: the join code as large as the screen allows, and who is in. */
+.lobby {
+  display: grid;
+  gap: 24px;
+}
+
+.lobby-join .qr svg {
+  width: min(320px, 70vw);
+  height: auto;
+}
+
+.people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+}
+
+.people li {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--tint);
+  font-weight: 600;
+}
+
+/* Above a game, the join code shrinks to a strip so latecomers can still
+ * scan it. */
+.strip-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.mini-qr svg {
+  display: block;
+  width: 84px;
+  height: 84px;
+}
+
+.strip-text {
+  display: grid;
+  gap: 2px;
+}
+
+.strip-text .link {
+  font-size: 0.95rem;
+}
+
+/* The games, as large buttons in the lobby and as tabs above a game. */
+.games {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.game {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 16px 18px;
+  min-height: 54px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  box-shadow: 0 4px 14px var(--shadow);
+}
+
+.game b {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  font-size: 1.3rem;
+}
+
+.game span {
+  font-size: 0.9rem;
+  color: var(--body);
+}
+
+.game:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.game.on {
+  border: 2px solid var(--ink);
+  background: var(--tint);
+}
+
+.games.compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.games.compact .game {
+  padding: 10px 14px;
+  min-height: 44px;
+  box-shadow: none;
+}
+
+.games.compact .game span {
+  display: none;
+}
+
+.games.compact .game b {
+  font-size: 1rem;
+}
+
+.games.compact .lobby-button {
+  margin-left: auto;
+  border-style: dashed;
+}
+
+/* The game itself. It scrolls inside the frame, so the frame takes the
+ * rest of the screen. */
+.frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  margin-top: 14px;
+  height: calc(100dvh - 210px);
+  min-height: 420px;
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+/* A phone in a game gives the frame everything below the top line. */
+#screen-player .frame {
+  height: calc(100dvh - 72px);
+  margin-top: 0;
+  border-radius: 0;
+}
+
+body.playing .bar {
+  margin-bottom: 0;
+  padding-block: 10px;
+}
+
+body.playing main {
+  padding-bottom: 0;
+}
+
+@media (min-width: 760px) {
+  .lobby {
+    grid-template-columns: auto 1fr;
+    align-items: start;
+  }
+
+  .games:not(.compact) {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+#waiting-count {
+  margin-top: 12px;
+}

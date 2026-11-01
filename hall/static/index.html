@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f8f7f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121512" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex">
+<title>Games for a room</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main>
+  <header class="bar">
+    <a class="brand" href="/"><img src="/icon.svg" alt="" width="26" height="26">Games for a room</a>
+    <span class="note" id="where"></span>
+  </header>
+
+  <p class="error" id="error" hidden></p>
+
+  <section id="screen-start" hidden>
+    <p class="eyebrow">For a room of people</p>
+    <h1>One room, every game</h1>
+    <p class="lead">Open a room and put its code on the wall. Everybody joins
+      once from their phone. You pick the game, and every phone follows
+      along when you switch to another one.</p>
+    <div class="actions"><button class="button primary" id="open">Open a room</button></div>
+    <div class="prose">
+      <h2>The games</h2>
+      <ul id="game-list"></ul>
+    </div>
+  </section>
+
+  <section id="screen-host" hidden>
+    <div class="panel" id="lobby">
+      <div class="lobby">
+        <div class="lobby-join">
+          <p class="eyebrow">Join on your phone</p>
+          <div class="qr" id="join-qr"></div>
+          <a class="link" id="join-link" href="#"></a>
+        </div>
+        <div class="lobby-people">
+          <p class="eyebrow" id="people-count">Nobody has joined yet</p>
+          <ul class="people" id="people"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="strip-bar" id="strip" hidden>
+      <div class="mini-qr" id="mini-qr" title="Scan to join"></div>
+      <div class="strip-text">
+        <a class="link" id="mini-link" href="#"></a>
+        <span class="note" id="mini-count"></span>
+      </div>
+    </div>
+
+    <nav class="games" id="games" aria-label="Pick the game"></nav>
+
+    <iframe id="host-frame" class="frame" title="The game" hidden></iframe>
+  </section>
+
+  <section id="screen-join" hidden>
+    <p class="eyebrow">You have been invited to play</p>
+    <h1>Join the room</h1>
+    <form class="panel" id="name-form">
+      <label for="name">Your name</label>
+      <input id="name" maxlength="32" required autocomplete="nickname" autocapitalize="words">
+      <p class="note">Everyone sees this in every game tonight.</p>
+      <div class="actions"><button class="button primary" type="submit">Join</button></div>
+    </form>
+    <p class="note" id="join-count"></p>
+  </section>
+
+  <section id="screen-player" hidden>
+    <div class="panel" id="waiting">
+      <p class="eyebrow">You are in</p>
+      <h1>Waiting for the host to pick a game</h1>
+      <p class="note" id="waiting-count"></p>
+      <p class="note">Keep this page open. It changes by itself when the
+        game starts, and again whenever the host switches games.</p>
+    </div>
+    <iframe id="player-frame" class="frame" title="The game" hidden></iframe>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
