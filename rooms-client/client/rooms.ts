@@ -477,3 +477,42 @@ export function html(id: string, markup: string): void {
 export function hide(id: string, hidden: boolean): void {
   byId(id).hidden = hidden;
 }
+
+/**
+ * Where a player's answer stands: not sent yet, sent and still open to
+ * change, changed on the phone but not sent, locked in, or missed.
+ */
+export type Sent = "waiting" | "sent" | "changed" | "locked" | "missed";
+
+/**
+ * Says in one box whether a player's answer is in and whether they can
+ * still change it. Each state has its own look, so a glance is enough.
+ * `target` is the box or its id; `null` hides the box.
+ */
+export function sentState(target: string | HTMLElement, state: Sent | null, title = "", detail = ""): void {
+  const box = typeof target === "string" ? byId(target) : target;
+  box.hidden = state === null;
+  if (state === null) return;
+  const moved = box.classList.contains("just");
+  box.className = `sent-state ${state}${moved ? " just" : ""}`;
+  box.replaceChildren(el("b", {}, title), ...(detail ? [el("span", {}, detail)] : []));
+}
+
+/** The same box, new, for a screen built from elements. */
+export function sentBox(state: Sent, title: string, detail = ""): HTMLElement {
+  const box = el("div", { className: "sent-state" });
+  box.setAttribute("aria-live", "polite");
+  sentState(box, state, title, detail);
+  return box;
+}
+
+/**
+ * A moment of movement on that box after a send goes through, so a press
+ * that sent is not mistaken for one that did nothing.
+ */
+export function landed(target: string | HTMLElement): void {
+  const box = typeof target === "string" ? byId(target) : target;
+  box.classList.remove("just");
+  void box.offsetWidth;
+  box.classList.add("just");
+}
