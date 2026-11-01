@@ -71,10 +71,14 @@ pub fn routes_under<S: Clone + Send + Sync + 'static>(files: Files, base: &str) 
 }
 
 /// The page with its links moved under `base`, and the base in a
-/// `<meta name="rooms-base">` the browser code reads.
-fn rebase(page: &str, base: &str) -> String {
+/// `<meta name="rooms-base">` the browser code reads. Public for a tool
+/// that serves its own page rather than through [`routes_under`].
+pub fn rebase(page: &str, base: &str) -> String {
     let base = base.trim_end_matches('/');
+    // A link to the home page goes to the base itself: a nested router
+    // serves `/numbers` but not `/numbers/`.
     page.replace("href=\"/", &format!("href=\"{base}/"))
+        .replace(&format!("href=\"{base}/\""), &format!("href=\"{base}\""))
         .replace("src=\"/", &format!("src=\"{base}/"))
         .replacen(
             "<head>",
@@ -216,8 +220,12 @@ mod tests {
 
     #[test]
     fn a_page_served_under_a_path_points_its_links_there() {
-        let page = "<html><head><link href=\"/app.css\"></head><script src=\"/app.js\"></script><a href=\"https://x\">";
+        let page = "<html><head><link href=\"/app.css\"></head><script src=\"/app.js\"></script><a href=\"https://x\"><a href=\"/\">";
         let moved = rebase(page, "/numbers");
+        assert!(
+            moved.contains("<a href=\"/numbers\">"),
+            "home is the base itself: {moved}"
+        );
         assert!(moved.contains("href=\"/numbers/app.css\""), "{moved}");
         assert!(moved.contains("src=\"/numbers/app.js\""), "{moved}");
         assert!(
