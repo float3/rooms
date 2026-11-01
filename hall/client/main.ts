@@ -49,6 +49,7 @@ interface PlayerView {
 
 /** One line about each game, for the host choosing between them. */
 const ABOUT: Record<string, string> = {
+  petrov: "Two sides, one missile each, and false alarms that look real.",
   numbers: "Everyone picks a number, and a rule decides who wins.",
   estimate: "Give a range you are 90% sure of. Learn how sure you should be.",
   updating: "Pair up with whoever disagrees with you most, and talk.",
@@ -56,6 +57,7 @@ const ABOUT: Record<string, string> = {
 
 /** The names, for the start page, which has no room to ask. */
 const NAMES: Record<string, string> = {
+  petrov: "Petrov Day",
   numbers: "Number games",
   estimate: "Estimation",
   updating: "Speed updating",

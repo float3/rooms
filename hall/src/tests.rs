@@ -84,7 +84,7 @@ async fn the_host_picks_a_game_and_everybody_is_in_it() {
     let view = ok(&app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
     assert!(view["playing"].is_null(), "a new hall is in the lobby");
     assert_eq!(view["people"], json!(["Ada", "Bo"]));
-    assert_eq!(view["games"].as_array().unwrap().len(), 3);
+    assert_eq!(view["games"].as_array().unwrap().len(), 4);
 
     let view = ok(
         &app,
@@ -232,7 +232,7 @@ async fn a_game_this_server_does_not_play_is_refused() {
 #[tokio::test]
 async fn every_game_is_served_under_its_own_path_with_its_links_moved_there() {
     let app = server("paths");
-    for game in ["numbers", "estimate", "updating"] {
+    for game in ["petrov", "numbers", "estimate", "updating"] {
         let response = app
             .clone()
             .oneshot(

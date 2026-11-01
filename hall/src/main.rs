@@ -2,7 +2,7 @@
 //! the host picks.
 //!
 //! Every game is served from this one server under its own path,
-//! `/numbers`, `/estimate` and `/updating`, exactly as it would be on its
+//! `/petrov`, `/numbers`, `/estimate` and `/updating`, exactly as it would be on its
 //! own. The hall keeps the people and the one QR code. When the host picks
 //! a game, the hall opens a room in it (or goes back to the one it opened
 //! earlier) and joins everybody into it by name. Phones show the game in a
@@ -255,10 +255,17 @@ fn router(app: App, games: Router) -> Router {
 /// Every game, each under its own path and with its own state file in
 /// `dir`, and the same games as the hall sees them.
 fn games(dir: &std::path::Path) -> (Router, Vec<Arc<dyn Tool>>) {
+    let petrov = petrov::load(
+        dir.join("petrov.json"),
+        dir.join("petrov-groups.json"),
+        "petrov",
+    )
+    .expect("the petrov brand exists");
     let numbers = numbers::load(dir.join("numbers.json"));
     let estimate = estimate::load(dir.join("estimate.json"));
     let updating = updating::load(dir.join("updating.json"));
     let routes = Router::new()
+        .nest("/petrov", petrov::router_under(petrov.clone(), "/petrov"))
         .nest(
             "/numbers",
             numbers::router_under(numbers.clone(), "/numbers"),
@@ -272,6 +279,7 @@ fn games(dir: &std::path::Path) -> (Router, Vec<Arc<dyn Tool>>) {
             updating::router_under(updating.clone(), dir.join("suggestions.jsonl"), "/updating"),
         );
     let tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(petrov),
         Arc::new(Mount {
             id: "numbers",
             title: "Number games",
