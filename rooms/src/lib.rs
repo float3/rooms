@@ -45,6 +45,7 @@ pub mod qr;
 pub mod site;
 mod store;
 mod stream;
+pub mod tool;
 
 pub use listen::{listen, where_it_listens};
 pub use store::{Room, Rooms};

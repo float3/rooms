@@ -27,6 +27,7 @@ used by [petrov](https://github.com/float3/petrov),
 | `rooms::key` | 24 random alphanumeric characters |
 | `rooms::http` | the JSON responses these tools answer with |
 | `rooms::site` | the page and its files, the clock, QR codes, opening a room and answering a host action |
+| `rooms::tool` | what a tool implements so the shared room can open its rooms and join people into them by name |
 | `rooms::listen` | the socket systemd passed in, or a bound address; `rooms::serve` listens and serves |
 | `rooms-client` | the TypeScript and CSS the pages share, and the build step that compiles them |
 

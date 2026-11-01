@@ -38,7 +38,23 @@ pub struct Files {
 /// `/h/<key>` runs it, `/j/<key>` joins it and `/p/<key>` is a player's.
 /// Then the icon, the script and the stylesheet, the clock, and QR codes.
 pub fn routes<S: Clone + Send + Sync + 'static>(files: Files) -> Router<S> {
-    let page = move || async move { Html(files.page) };
+    routes_under(files, "")
+}
+
+/// The same, for a tool served under a path such as `/numbers` rather
+/// than at the root, which is how the shared room serves several tools
+/// from one server. Mount the router with `Router::nest(base, ...)`.
+///
+/// The page's own links to `/...` are rewritten to `<base>/...`, and the
+/// base is written into the page for the browser code to find.
+pub fn routes_under<S: Clone + Send + Sync + 'static>(files: Files, base: &str) -> Router<S> {
+    let page: &'static str = if base.is_empty() {
+        files.page
+    } else {
+        // Once per tool when the server starts, so leaking it is fine.
+        Box::leak(rebase(files.page, base).into_boxed_str())
+    };
+    let page = move || async move { Html(page) };
     Router::new()
         .route("/", get(page))
         .route("/h/{key}", get(page))
@@ -52,6 +68,23 @@ pub fn routes<S: Clone + Send + Sync + 'static>(files: Files) -> Router<S> {
         )
         .route("/api/time", get(time))
         .route("/api/qr", post(qr_code))
+}
+
+/// The page with its links moved under `base`, and the base in a
+/// `<meta name="rooms-base">` the browser code reads. Public for a tool
+/// that serves its own page rather than through [`routes_under`].
+pub fn rebase(page: &str, base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    // A link to the home page goes to the base itself: a nested router
+    // serves `/numbers` but not `/numbers/`.
+    page.replace("href=\"/", &format!("href=\"{base}/"))
+        .replace(&format!("href=\"{base}/\""), &format!("href=\"{base}\""))
+        .replace("src=\"/", &format!("src=\"{base}/"))
+        .replacen(
+            "<head>",
+            &format!("<head>\n<meta name=\"rooms-base\" content=\"{base}\">"),
+            1,
+        )
 }
 
 /// The compiled script. Not cached, so that a phone picks up a new
@@ -182,6 +215,36 @@ mod tests {
             assert_eq!(status, StatusCode::OK, "{path}");
             assert!(kind.starts_with("text/html"), "{path}: {kind}");
             assert_eq!(body, FILES.page);
+        }
+    }
+
+    #[test]
+    fn a_page_served_under_a_path_points_its_links_there() {
+        let page = "<html><head><link href=\"/app.css\"></head><script src=\"/app.js\"></script><a href=\"https://x\"><a href=\"/\">";
+        let moved = rebase(page, "/numbers");
+        assert!(
+            moved.contains("<a href=\"/numbers\">"),
+            "home is the base itself: {moved}"
+        );
+        assert!(moved.contains("href=\"/numbers/app.css\""), "{moved}");
+        assert!(moved.contains("src=\"/numbers/app.js\""), "{moved}");
+        assert!(
+            moved.contains("href=\"https://x\""),
+            "other sites are left alone"
+        );
+        assert!(moved.contains("<meta name=\"rooms-base\" content=\"/numbers\">"));
+    }
+
+    #[tokio::test]
+    async fn a_tool_nested_under_a_path_serves_its_page_there() {
+        let app: Router = Router::new().nest("/numbers", routes_under(FILES, "/numbers"));
+        for path in ["/numbers/h/abc", "/numbers/p/abc", "/numbers/app.js"] {
+            let response = app
+                .clone()
+                .oneshot(axum::http::Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
         }
     }
 

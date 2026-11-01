@@ -4,6 +4,35 @@
 // posts what the person in front of it did. All three do that the same
 // way, so it is written once here.
 
+/**
+ * The path this tool is served under: "" on its own server, "/numbers"
+ * when the shared room serves several tools from one. The server writes
+ * it into the page.
+ */
+export const BASE: string =
+  document
+    .querySelector<HTMLMetaElement>('meta[name="rooms-base"]')
+    ?.content.replace(/\/+$/, "") ?? "";
+
+/** A path on this tool's server, under its base. */
+export function here(path: string): string {
+  return path.startsWith("/") ? `${BASE}${path}` : path;
+}
+
+/**
+ * Whether the page is inside the shared room's frame. The shared room
+ * shows the join link and the header itself, so the tool's own are
+ * hidden (see `.embedded` in rooms.css).
+ */
+export const EMBEDDED: boolean = (() => {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true; // a frame on another origin cannot see its parent
+  }
+})();
+if (EMBEDDED) document.documentElement.classList.add("embedded");
+
 /** Everything the server sends is stamped with its own clock. */
 export interface Envelope<V> {
   now: number;
@@ -70,7 +99,7 @@ export class Refused extends Error {
  * every endpoint answers in JSON, including when it refuses.
  */
 export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(here(path), {
     method,
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? null : JSON.stringify(body),
@@ -151,7 +180,7 @@ export function subscribe<V>(
       setTimeout(() => void connect(), RETRY_MS);
       return;
     }
-    const source = new EventSource(events);
+    const source = new EventSource(here(events));
     source.onmessage = (event: MessageEvent<string>) => {
       lostAt = null;
       try {
@@ -210,7 +239,7 @@ export function opening(button = "open"): void {
     byId<HTMLButtonElement>(button).disabled = true;
     try {
       const keys = await api<{ host: string }>("POST", "/api/rooms");
-      location.href = `/h/${keys.host}`;
+      location.href = here(`/h/${keys.host}`);
     } catch (e) {
       byId<HTMLButtonElement>(button).disabled = false;
       throw e;
@@ -224,7 +253,7 @@ export function opening(button = "open"): void {
 export function joining(ns: string, key: string): void {
   const kept = remembered(ns, key);
   if (kept) {
-    location.replace(`/p/${kept}`);
+    location.replace(here(`/p/${kept}`));
     return;
   }
   show("join");
@@ -244,7 +273,7 @@ export function joining(ns: string, key: string): void {
       name: byId<HTMLInputElement>("name").value,
     });
     remember(ns, key, body.player);
-    location.href = `/p/${body.player}`;
+    location.href = here(`/p/${body.player}`);
   });
 }
 
@@ -264,7 +293,7 @@ export function showJoin(join: string): void {
 
 /** Asks the server for the link as a QR code and inserts it. */
 export function qrInto(id: string, link: string): void {
-  fetch("/api/qr", { method: "POST", body: link })
+  fetch(here("/api/qr"), { method: "POST", body: link })
     .then((response) => (response.ok ? response.text() : ""))
     .then((svg) => {
       byId(id).innerHTML = svg;
@@ -374,7 +403,10 @@ export type Kind = "host" | "join" | "player" | "start";
 
 /** Which of the three links this page was opened with. */
 export function route(): { kind: Kind; key: string } {
-  const parts = location.pathname.split("/").filter((part) => part !== "");
+  const path = location.pathname.startsWith(`${BASE}/`)
+    ? location.pathname.slice(BASE.length)
+    : location.pathname;
+  const parts = path.split("/").filter((part) => part !== "");
   const kinds: Record<string, Kind> = { h: "host", j: "join", p: "player" };
   if (parts.length === 2 && kinds[parts[0]]) {
     return { kind: kinds[parts[0]], key: parts[1] };
@@ -404,7 +436,7 @@ export function remember(ns: string, key: string, value: string): void {
 
 /** The join link, from the key the room returned. */
 export function joinLink(join: string): string {
-  return `${location.origin}/j/${join}`;
+  return `${location.origin}${BASE}/j/${join}`;
 }
 
 /** Connects a form to a handler whose request may be refused. */
@@ -444,4 +476,43 @@ export function html(id: string, markup: string): void {
 
 export function hide(id: string, hidden: boolean): void {
   byId(id).hidden = hidden;
+}
+
+/**
+ * Where a player's answer stands: not sent yet, sent and still open to
+ * change, changed on the phone but not sent, locked in, or missed.
+ */
+export type Sent = "waiting" | "sent" | "changed" | "locked" | "missed";
+
+/**
+ * Says in one box whether a player's answer is in and whether they can
+ * still change it. Each state has its own look, so a glance is enough.
+ * `target` is the box or its id; `null` hides the box.
+ */
+export function sentState(target: string | HTMLElement, state: Sent | null, title = "", detail = ""): void {
+  const box = typeof target === "string" ? byId(target) : target;
+  box.hidden = state === null;
+  if (state === null) return;
+  const moved = box.classList.contains("just");
+  box.className = `sent-state ${state}${moved ? " just" : ""}`;
+  box.replaceChildren(el("b", {}, title), ...(detail ? [el("span", {}, detail)] : []));
+}
+
+/** The same box, new, for a screen built from elements. */
+export function sentBox(state: Sent, title: string, detail = ""): HTMLElement {
+  const box = el("div", { className: "sent-state" });
+  box.setAttribute("aria-live", "polite");
+  sentState(box, state, title, detail);
+  return box;
+}
+
+/**
+ * A moment of movement on that box after a send goes through, so a press
+ * that sent is not mistaken for one that did nothing.
+ */
+export function landed(target: string | HTMLElement): void {
+  const box = typeof target === "string" ? byId(target) : target;
+  box.classList.remove("just");
+  void box.offsetWidth;
+  box.classList.add("just");
 }
