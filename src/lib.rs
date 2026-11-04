@@ -134,6 +134,12 @@ struct Mark {
 }
 
 #[derive(Deserialize)]
+struct Pick {
+    id: u32,
+    picked: bool,
+}
+
+#[derive(Deserialize)]
 struct Skip {
     id: u32,
 }
@@ -203,6 +209,10 @@ async fn stop(State(app): State<App>, Path(key): Path<String>) -> Response {
 
 async fn extend(State(app): State<App>, Path(key): Path<String>) -> Response {
     act(&app, &key, |game, now| game.extend(now)).await
+}
+
+async fn close_picks(State(app): State<App>, Path(key): Path<String>) -> Response {
+    act(&app, &key, |game, _| game.close_picks()).await
 }
 
 async fn warmup(State(app): State<App>, Path(key): Path<String>) -> Response {
@@ -301,6 +311,14 @@ async fn mark(State(app): State<App>, Path(key): Path<String>, Json(m): Json<Mar
     .await
 }
 
+async fn pick(State(app): State<App>, Path(key): Path<String>, Json(p): Json<Pick>) -> Response {
+    let player = key.clone();
+    act_as(&app, &key, move |game, _| {
+        game.pick(&player, p.id, p.picked)
+    })
+    .await
+}
+
 async fn skip(State(app): State<App>, Path(key): Path<String>, Json(s): Json<Skip>) -> Response {
     let player = key.clone();
     act_as(&app, &key, move |game, _| game.skip(&player, s.id)).await
@@ -360,6 +378,7 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
         .route("/api/h/{key}/extend", post(extend))
         .route("/api/h/{key}/finish", post(finish))
         .route("/api/h/{key}/reopen", post(reopen))
+        .route("/api/h/{key}/picks/close", post(close_picks))
         .route("/api/h/{key}/warmup", post(warmup))
         .route("/api/h/{key}/warmup/next", post(warmup_next))
         .route("/api/h/{key}/warmup/end", post(warmup_end))
@@ -368,6 +387,7 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
         .route("/api/p/{key}/events", get(player_events))
         .route("/api/p/{key}/answer", put(answer))
         .route("/api/p/{key}/mark", put(mark))
+        .route("/api/p/{key}/pick", put(pick))
         .route("/api/p/{key}/skip", put(skip))
         .route("/api/p/{key}/guess", put(guess))
         .route("/api/p/{key}/kudos", put(kudos))
@@ -728,6 +748,70 @@ mod tests {
             after["opposites"][0]["name"], "Bo",
             "and Bo is the one to go and find"
         );
+    }
+
+    #[tokio::test]
+    async fn in_the_pick_mode_the_room_plays_what_people_picked() {
+        let t = test("pick");
+        let (host, ada, bo) = ready(&t.app).await;
+        let view = ok(
+            &t.app,
+            "PUT",
+            &format!("/api/h/{host}/setup"),
+            Some(json!({"mode": "pick", "topics": ["mind"], "side": 4})),
+        )
+        .await["view"]
+            .clone();
+        assert_eq!(view["phase"], "picking");
+        let pool = view["deck"].as_u64().unwrap();
+
+        let mine = ok(&t.app, "GET", &format!("/api/p/{ada}"), None).await["view"].clone();
+        assert_eq!(mine["phase"], "picking");
+        assert_eq!(mine["picks"], 3);
+        assert_eq!(mine["squares"].as_array().unwrap().len() as u64, pool);
+        let (status, _) = call(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{ada}/answer"),
+            Some(json!({"id": 0, "value": 50})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "no answers while picking");
+
+        for (who, id) in [(&ada, 5), (&ada, 2), (&bo, 2)] {
+            ok(
+                &t.app,
+                "PUT",
+                &format!("/api/p/{who}/pick"),
+                Some(json!({"id": id, "picked": true})),
+            )
+            .await;
+        }
+        let view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        assert_eq!(view["picking"]["pickers"], 2);
+        assert_eq!(view["picking"]["picked"][0]["n"], 2);
+        assert_eq!(view["picking"]["picked"][0]["statement"]["id"], 2);
+        let (status, _) = call(&t.app, "POST", &format!("/api/h/{host}/round"), None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "no round while picking");
+
+        let view =
+            ok(&t.app, "POST", &format!("/api/h/{host}/picks/close"), None).await["view"].clone();
+        assert_eq!(view["phase"], "answering");
+        assert_eq!(view["deck"], 2);
+        assert!(view["picking"].is_null());
+
+        let mine = ok(&t.app, "GET", &format!("/api/p/{bo}"), None).await["view"].clone();
+        let squares = mine["squares"].as_array().unwrap();
+        assert_eq!(squares.len(), 2);
+        assert_eq!(squares[0]["picked"], true, "Bo's pick, the most picked");
+        assert_eq!(squares[1]["picked"], false);
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{bo}/answer"),
+            Some(json!({"id": 1, "value": 30})),
+        )
+        .await;
     }
 
     #[tokio::test]

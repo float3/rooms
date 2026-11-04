@@ -26,9 +26,9 @@ import {
   watch,
 } from "./rooms";
 
-type Mode = "bingo" | "open" | "free";
+type Mode = "bingo" | "open" | "free" | "pick";
 type Scale = "written" | "agree" | "chance";
-type Phase = "answering" | "warmup" | "talking" | "updating" | "finished";
+type Phase = "picking" | "answering" | "warmup" | "talking" | "updating" | "finished";
 type Stage = "before" | "clue" | "revealed";
 
 interface Statement {
@@ -153,6 +153,17 @@ interface Tally {
   updated: number;
 }
 
+interface Picked {
+  statement: Statement;
+  n: number;
+}
+
+interface Picking {
+  pickers: number;
+  limit: number;
+  picked: Picked[];
+}
+
 interface HostView {
   join: string;
   mode: Mode;
@@ -181,6 +192,7 @@ interface HostView {
   warmup: WarmHost | null;
   warmups: number;
   calibrated: Calibrated[];
+  picking: Picking | null;
 }
 
 interface Seen {
@@ -193,6 +205,7 @@ interface Square {
   answer: number | null;
   first: number | null;
   marked: boolean;
+  picked: boolean;
   count: number;
   others: Seen[];
 }
@@ -245,6 +258,7 @@ interface PlayerView {
   warmup: WarmMine | null;
   calibration: [number, number] | null;
   next: number[];
+  picks: number;
 }
 
 /** What each mode is called on the facilitator's screen. */
@@ -252,9 +266,11 @@ const MODES: Record<Mode, (side: number) => string> = {
   bingo: (side) => `A ${side}×${side} bingo card each`,
   open: () => "Answer anything",
   free: () => "Free for all",
+  pick: () => "Everyone picks the statements",
 };
 
 const PHASES: Record<Phase, string> = {
+  picking: "Picking",
   answering: "Answering",
   warmup: "Warm-up",
   talking: "Talking",
@@ -435,6 +451,7 @@ function host(key: string): void {
         { value: "bingo", label: "Bingo card", on: d.mode === "bingo" },
         { value: "open", label: "Answer anything", on: d.mode === "open" },
         { value: "free", label: "Free for all", on: d.mode === "free" },
+        { value: "pick", label: "Everyone picks", on: d.mode === "pick" },
       ],
       (mode) => {
         d.mode = mode;
@@ -447,7 +464,9 @@ function host(key: string): void {
         ? "Everyone is dealt a grid from the topics below. What they talk about is marked; a full line is a bingo."
         : d.mode === "open"
           ? "Everyone sees every statement from the topics below and answers as many as they like."
-          : "Everyone browses every statement on their own time. Each shows how many people have answered it, the most answered first, and who said what once you have answered it yourself. Phones point people at whoever disagrees with them most; rounds are optional.",
+          : d.mode === "pick"
+            ? "Before anyone answers, everyone picks up to three statements from the topics below that they would like to talk about. When you close the picks, the room answers every statement somebody picked, the most picked first."
+            : "Everyone browses every statement on their own time. Each shows how many people have answered it, the most answered first, and who said what once you have answered it yourself. Phones point people at whoever disagrees with them most; rounds are optional.",
     );
     chips<Scale>(
       "scales",
@@ -637,6 +656,28 @@ function host(key: string): void {
       );
       return;
     }
+    if (view.phase === "picking" && view.picking) {
+      const p = view.picking;
+      wall.replaceChildren(
+        el("p", { className: "eyebrow" }, "Before we start"),
+        el("p", { className: "wall-claim" }, `Pick up to ${p.limit} statements you would like to talk about`),
+        el(
+          "p",
+          { className: "wall-line" },
+          `${p.pickers} of ${plural(view.players.length, "person has", "people have")} picked, ${plural(p.picked.length, "statement", "statements")} so far.`,
+        ),
+        p.picked.length
+          ? el(
+              "ol",
+              { className: "tallies" },
+              ...p.picked.slice(0, 8).map((t) =>
+                el("li", {}, el("span", {}, t.statement.text), el("small", {}, plural(t.n, "pick", "picks"))),
+              ),
+            )
+          : "",
+      );
+      return;
+    }
     if (view.phase === "finished") {
       wall.replaceChildren(
         el("p", { className: "eyebrow" }, "That was the evening"),
@@ -665,7 +706,8 @@ function host(key: string): void {
     const warm = view.phase === "warmup" ? view.warmup : null;
     text("h-phase", warm ? `Warm-up ${warm.number}` : PHASES[view.phase]);
     byId("start").textContent = view.rounds ? `Start round ${view.rounds + 1}` : "Start the first round";
-    hide("start", talking || view.phase === "finished" || warm !== null);
+    hide("start", talking || view.phase === "finished" || view.phase === "picking" || warm !== null);
+    hide("close-picks", view.phase !== "picking");
     hide("stop", !talking);
     hide("extend", !(talking || (view.phase === "updating" && view.rounds > 0)));
     hide("finish", view.phase === "finished" || warm !== null);
@@ -814,6 +856,7 @@ function host(key: string): void {
   };
 
   onClick("start", () => send("POST", "/round"));
+  onClick("close-picks", () => send("POST", "/picks/close"));
   onClick("stop", () => send("POST", "/stop"));
   onClick("extend", () => send("POST", "/extend"));
   onClick("finish", () => send("POST", "/finish"));
@@ -897,6 +940,13 @@ function player(key: string): void {
     tag.title = answered && !finished ? "Sent when you let go. You can change it whenever you like." : "";
   };
 
+  const pickIt = async (id: number, picked: boolean): Promise<void> => {
+    accept(await api("PUT", at("/pick"), { id, picked }));
+  };
+
+  /** In the pick mode, before answering: each statement's pick button. */
+  const pickButtons = new Map<number, HTMLButtonElement>();
+
   const markIt = async (id: number, marked: boolean): Promise<void> => {
     accept(await api("PUT", at("/mark"), { id, marked }));
   };
@@ -941,7 +991,38 @@ function player(key: string): void {
   /** Builds the list once per deck; later views only set its values. */
   const build = (view: PlayerView): void => {
     rows.clear();
+    pickButtons.clear();
     const names = new Map(view.topics);
+    const byTopic = new Map<string, Square[]>();
+    for (const sq of view.squares) {
+      const list = byTopic.get(sq.statement.topic) ?? [];
+      list.push(sq);
+      byTopic.set(sq.statement.topic, list);
+    }
+    if (view.phase === "picking") {
+      const choice = (sq: Square): HTMLElement => {
+        const b = el("button", { type: "button", className: "chip small" }, "Pick");
+        b.addEventListener("click", () => run(pickIt(sq.statement.id, b.getAttribute("aria-pressed") !== "true")));
+        pickButtons.set(sq.statement.id, b);
+        return el(
+          "div",
+          { className: "statement-row", id: `s-${sq.statement.id}` },
+          el("p", { className: "statement" }, sq.statement.text),
+          el("div", { className: "row-foot" }, el("span", {}), b),
+        );
+      };
+      byId("statements").replaceChildren(
+        ...[...byTopic.entries()].map(([topic, squares], i) =>
+          el(
+            "details",
+            { className: "panel topic", open: i === 0 },
+            el("summary", {}, el("span", {}, names.get(topic) ?? topic), el("small", { id: `count-${topic}` })),
+            ...squares.map(choice),
+          ),
+        ),
+      );
+      return;
+    }
     const make = (sq: Square): HTMLElement => {
       const s = sq.statement;
       const value = el("span", { className: "value" }, said(s, sq.answer));
@@ -962,7 +1043,7 @@ function player(key: string): void {
         el(
           "p",
           { className: "note" },
-          `${names.get(s.topic) ?? s.topic}${
+          `${names.get(s.topic) ?? s.topic}${sq.picked ? " · your pick" : ""}${
             s.chance ? (s.text.endsWith("?") ? " · a probability" : " · how confident are you that this is true?") : ""
           }`,
         ),
@@ -1012,13 +1093,19 @@ function player(key: string): void {
       tabs();
       return;
     }
-    // In the open mode, one folding section per topic.
-    const byTopic = new Map<string, Square[]>();
-    for (const sq of view.squares) {
-      const list = byTopic.get(sq.statement.topic) ?? [];
-      list.push(sq);
-      byTopic.set(sq.statement.topic, list);
+    if (view.mode === "pick") {
+      list.replaceChildren(
+        el(
+          "section",
+          { className: "panel" },
+          el("h2", {}, "The room's picks"),
+          el("p", { className: "note" }, "Every statement somebody picked, the most picked first. Answer as many as you like."),
+          ...view.squares.map(make),
+        ),
+      );
+      return;
     }
+    // In the open mode, one folding section per topic.
     list.replaceChildren(
       el(
         "p",
@@ -1483,6 +1570,22 @@ function player(key: string): void {
       );
       return;
     }
+    if (view.phase === "picking") {
+      const mine = view.squares.filter((sq) => sq.picked);
+      box.replaceChildren(
+        el("p", { className: "eyebrow" }, `Picking · ${mine.length} of ${view.picks}`),
+        el("h2", {}, "What would you like to talk about?"),
+        el(
+          "p",
+          { className: "note" },
+          `Pick up to ${view.picks} statements below. When the host closes the picks, everybody answers the statements somebody picked, the most picked first.`,
+        ),
+        mine.length
+          ? el("ol", { className: "tallies" }, ...mine.map((sq) => el("li", {}, el("span", {}, sq.statement.text))))
+          : "",
+      );
+      return;
+    }
     if (view.phase === "finished") {
       box.replaceChildren(
         el("p", { className: "eyebrow" }, "That was the evening"),
@@ -1556,7 +1659,8 @@ function player(key: string): void {
     current = view;
     text("you", `You are ${view.name} · ${plural(view.players, "person", "people")} in the room`);
     text("where", view.round ? `Round ${view.round}` : "");
-    const shape = `${view.mode}:${view.squares.map((s) => s.statement.id).join(",")}`;
+    const picking = view.phase === "picking";
+    const shape = `${view.mode}:${picking}:${view.squares.map((s) => s.statement.id).join(",")}`;
     if (shape !== builtFor) {
       builtFor = shape;
       build(view);
@@ -1576,6 +1680,24 @@ function player(key: string): void {
       if (row.mark) row.mark.setAttribute("aria-pressed", String(sq.marked));
       if (row.crowd) row.crowd.textContent = crowdText(sq);
       row.box.classList.toggle("answered", sq.answer !== null);
+    }
+    if (picking) {
+      const full = view.squares.filter((sq) => sq.picked).length >= view.picks;
+      const counts = new Map<string, number>();
+      for (const sq of view.squares) {
+        const b = pickButtons.get(sq.statement.id);
+        if (b) {
+          b.setAttribute("aria-pressed", String(sq.picked));
+          b.textContent = sq.picked ? "✓ Picked" : "Pick";
+          b.disabled = full && !sq.picked;
+        }
+        if (sq.picked) counts.set(sq.statement.topic, (counts.get(sq.statement.topic) ?? 0) + 1);
+      }
+      for (const topic of new Set(view.squares.map((sq) => sq.statement.topic))) {
+        const n = document.getElementById(`count-${topic}`);
+        const c = counts.get(topic);
+        if (n) n.textContent = c ? `${c} picked` : "";
+      }
     }
     if (view.mode === "open") {
       const counts = new Map<string, [number, number]>();
@@ -1604,6 +1726,7 @@ function player(key: string): void {
       view.awards,
       view.warmup,
       view.calibration,
+      picking ? view.squares.filter((sq) => sq.picked).map((sq) => sq.statement.id) : null,
     ]);
     // Not while a slider in it is under a finger: it is drawn again when
     // the finger lets go and the next update arrives.

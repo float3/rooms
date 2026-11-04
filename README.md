@@ -37,6 +37,15 @@ in the **bingo** mode each person is dealt a grid of statements, 3×3 to
 bingo. in the **open** mode everybody sees every statement from the chosen
 topics and answers as many as they like.
 
+in the **pick** mode nobody answers at first: everybody sees the whole
+pool from the chosen topics and picks up to three statements they would
+like to talk about, and the wall shows what is being picked. when the
+facilitator closes the picks, the room plays every statement somebody
+picked, once however many picked it, the most picked first and ties in
+the order of the pool. people who picked nothing, or join later, answer
+the same statements as everybody else. the picks cannot be closed while
+nothing is picked.
+
 the **free-for-all** mode is for browsing on your own time, over an
 evening or longer. every statement shows how many people have answered
 it, and the most answered come first, so a room with a large deck

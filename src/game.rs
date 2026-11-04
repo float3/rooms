@@ -28,6 +28,8 @@ pub const MAX_CUSTOM: usize = 60;
 pub const SIDES: &[u8] = &[3, 4, 5];
 /// Round lengths the facilitator can pick, in minutes.
 pub const MINUTES: &[u32] = &[2, 3, 4, 5, 7, 10];
+/// How many statements each person can pick in the pick mode.
+pub const PICKS: usize = 3;
 /// How much a round is extended by.
 pub const EXTRA_MS: u64 = 60_000;
 /// How far an answer has to move to count as an update, on the shared
@@ -88,6 +90,10 @@ pub enum Mode {
     /// the ones people care about, and who answered what is shown only to
     /// people who have answered it themselves.
     Free,
+    /// Before anybody answers, everybody picks up to `PICKS` statements
+    /// they would like to talk about from the topics' whole pool. The room
+    /// then plays the statements somebody picked, as in the open mode.
+    Pick,
 }
 
 /// How the room answers its statements. Most can be put either way, so
@@ -111,6 +117,9 @@ pub enum Scale {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Phase {
+    /// In the pick mode, before anybody answers: everybody picks the
+    /// statements they would like to talk about.
+    Picking,
     /// Answering, and finding people by hand.
     Answering,
     /// A calibration warm-up question is on. See `crate::warmup`.
@@ -173,6 +182,9 @@ pub struct Player {
     /// not show them again.
     #[serde(default)]
     pub skipped: BTreeSet<u32>,
+    /// In the pick mode, the statements they would like to talk about.
+    #[serde(default)]
+    pub picks: BTreeSet<u32>,
 }
 
 /// Two people, sometimes three, and what they were given to talk about.
@@ -460,7 +472,7 @@ impl Game {
     pub fn hand(&self, player: &Player) -> Vec<u32> {
         match self.mode {
             Mode::Bingo => player.card.clone(),
-            Mode::Open | Mode::Free => self.deck.iter().map(|s| s.id).collect(),
+            Mode::Open | Mode::Free | Mode::Pick => self.deck.iter().map(|s| s.id).collect(),
         }
     }
 
@@ -477,7 +489,7 @@ impl Game {
         let all = statements(&self.topics, &self.custom, self.scale);
         let customs: Vec<&Statement> = all.iter().filter(|s| s.topic == "custom").collect();
         let mut picked: Vec<Statement> = match self.mode {
-            Mode::Open | Mode::Free => all.clone(),
+            Mode::Open | Mode::Free | Mode::Pick => all.clone(),
             Mode::Bingo => {
                 let want = (self.side as usize).pow(2) * 2;
                 let mut bank: Vec<&Statement> =
@@ -501,6 +513,7 @@ impl Game {
         let keys: Vec<String> = self.players.iter().map(|p| p.key.clone()).collect();
         for p in &mut self.players {
             p.card.clear();
+            p.picks.clear();
         }
         for key in keys {
             self.deal(&key);
@@ -578,6 +591,13 @@ impl Game {
         self.custom = custom;
         self.side = side;
         self.build_deck();
+        if matches!(self.phase, Phase::Answering | Phase::Picking) {
+            self.phase = if mode == Mode::Pick {
+                Phase::Picking
+            } else {
+                Phase::Answering
+            };
+        }
         Ok(())
     }
 
@@ -612,6 +632,7 @@ impl Game {
             first: BTreeMap::new(),
             marked: BTreeSet::new(),
             skipped: BTreeSet::new(),
+            picks: BTreeSet::new(),
         });
         self.deal(&key);
         self.last_seen = now;
@@ -624,6 +645,9 @@ impl Game {
     pub fn answer(&mut self, key: &str, id: u32, value: Option<i16>) -> Result<(), &'static str> {
         if self.phase == Phase::Finished {
             return Err("The evening is over.");
+        }
+        if self.phase == Phase::Picking {
+            return Err("Answering starts once the host closes the picks.");
         }
         let Some(statement) = self.statement(id).cloned() else {
             return Err("That statement is not in this room.");
@@ -750,10 +774,82 @@ impl Game {
         Ok(())
     }
 
+    /// Picks a statement to talk about, or takes the pick back.
+    pub fn pick(&mut self, key: &str, id: u32, picked: bool) -> Result<(), &'static str> {
+        if self.phase != Phase::Picking {
+            return Err("The picks are closed.");
+        }
+        if self.statement(id).is_none() {
+            return Err("That statement is not in this room.");
+        }
+        let player = self.player_mut(key)?;
+        if !picked {
+            player.picks.remove(&id);
+            return Ok(());
+        }
+        if !player.picks.contains(&id) && player.picks.len() >= PICKS {
+            return Err("That is three picks. Take one back to pick another.");
+        }
+        player.picks.insert(id);
+        Ok(())
+    }
+
+    /// How many people picked each statement, by statement.
+    pub fn pick_counts(&self) -> BTreeMap<u32, usize> {
+        let mut counts = BTreeMap::new();
+        for id in self.players.iter().flat_map(|p| &p.picks) {
+            *counts.entry(*id).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// Ends the picking: the deck becomes every statement somebody picked,
+    /// once each however many picked it, the most picked first and the
+    /// rest in the order the pool has them. Everybody answers from it,
+    /// whether they picked anything or not.
+    pub fn close_picks(&mut self) -> Result<(), &'static str> {
+        if self.phase != Phase::Picking {
+            return Err("Nobody is picking.");
+        }
+        let counts = self.pick_counts();
+        if counts.is_empty() {
+            return Err("Nobody has picked a statement yet.");
+        }
+        let mut order: Vec<u32> = counts.keys().copied().collect();
+        order.sort_by_key(|id| (std::cmp::Reverse(counts[id]), *id));
+        let renumbered: BTreeMap<u32, u32> = order
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        self.deck = order
+            .iter()
+            .enumerate()
+            .filter_map(|(new, &old)| {
+                let mut s = self.statement(old)?.clone();
+                s.id = new as u32;
+                Some(s)
+            })
+            .collect();
+        for p in &mut self.players {
+            p.picks = p
+                .picks
+                .iter()
+                .filter_map(|id| renumbered.get(id))
+                .copied()
+                .collect();
+        }
+        self.phase = Phase::Answering;
+        Ok(())
+    }
+
     /// Pairs everybody up and starts the clock.
     pub fn start_round(&mut self, now: u64) -> Result<(), &'static str> {
         if self.phase == Phase::Talking {
             return Err("A round is already on.");
+        }
+        if self.phase == Phase::Picking {
+            return Err("Close the picks first, so everybody answers the same statements.");
         }
         if self.rounds.len() >= MAX_ROUNDS {
             return Err("That is as many rounds as one room holds.");
@@ -1690,5 +1786,81 @@ mod tests {
         assert_eq!(agree.gap(1, 7), 200);
         assert_eq!(agree.gap(4, 5), 33);
         assert_eq!(agree.norm(4), 0.0);
+    }
+
+    #[test]
+    fn in_the_pick_mode_everybody_picks_up_to_three_before_answering() {
+        let mut g = room(Mode::Pick);
+        assert_eq!(g.phase, Phase::Picking);
+        assert_eq!(g.deck.len(), room(Mode::Open).deck.len(), "the whole pool");
+        let a = g.join("A", 1).unwrap();
+        assert!(
+            g.answer(&a, 0, Some(4)).is_err(),
+            "no answers while picking"
+        );
+        for id in 0..3 {
+            g.pick(&a, id, true).unwrap();
+        }
+        g.pick(&a, 2, true).unwrap();
+        assert!(g.pick(&a, 3, true).is_err(), "three at most");
+        g.pick(&a, 0, false).unwrap();
+        g.pick(&a, 3, true).unwrap();
+        assert_eq!(g.player(&a).unwrap().picks, BTreeSet::from([1, 2, 3]));
+        assert!(g.start_round(0).is_err(), "no round before the picks close");
+        assert!(g.start_warmup().is_err());
+    }
+
+    #[test]
+    fn closing_the_picks_keeps_each_picked_statement_once_most_picked_first() {
+        let mut g = room(Mode::Pick);
+        let pool: Vec<String> = g.deck.iter().map(|s| s.text.clone()).collect();
+        let a = g.join("A", 1).unwrap();
+        let b = g.join("B", 1).unwrap();
+        let c = g.join("C", 1).unwrap();
+        g.join("D", 1).unwrap();
+        for id in [9, 4, 7] {
+            g.pick(&a, id, true).unwrap();
+        }
+        for id in [7, 4, 1] {
+            g.pick(&b, id, true).unwrap();
+        }
+        g.pick(&c, 7, true).unwrap();
+        assert!(g.close_picks().is_ok());
+        assert_eq!(g.phase, Phase::Answering);
+        let texts: Vec<&str> = g.deck.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [&pool[7], &pool[4], &pool[1], &pool[9]],
+            "by how many picked it, then as the pool has them"
+        );
+        assert!(g.deck.iter().enumerate().all(|(i, s)| s.id == i as u32));
+        assert_eq!(g.player(&a).unwrap().picks, BTreeSet::from([0, 1, 3]));
+        let d = g.join("D", 1).unwrap();
+        assert_eq!(
+            g.hand(g.player(&d).unwrap()).len(),
+            4,
+            "somebody who picked nothing answers the room's picks"
+        );
+        g.answer(&d, 0, Some(5)).unwrap();
+        assert!(g.pick(&d, 1, true).is_err(), "the picks are closed");
+        assert!(g.close_picks().is_err());
+    }
+
+    #[test]
+    fn the_picks_cannot_close_with_nothing_picked_and_a_new_setup_starts_over() {
+        let mut g = room(Mode::Pick);
+        let a = g.join("A", 1).unwrap();
+        assert!(g.close_picks().is_err(), "nothing to play");
+        g.pick(&a, 5, true).unwrap();
+        g.setup(Mode::Pick, Scale::Chance, &["mind".into()], "", 3)
+            .unwrap();
+        assert_eq!(g.phase, Phase::Picking);
+        assert!(
+            g.player(&a).unwrap().picks.is_empty(),
+            "picks of another pool"
+        );
+        g.setup(Mode::Open, Scale::Chance, &["mind".into()], "", 3)
+            .unwrap();
+        assert_eq!(g.phase, Phase::Answering, "another mode answers at once");
     }
 }

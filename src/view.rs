@@ -9,7 +9,7 @@
 use serde::Serialize;
 
 use crate::game::{
-    Game, Group, KUDOS_POINTS, MINUTES, Mode, Phase, Player, SIDES, Scale, Score, Statement,
+    Game, Group, KUDOS_POINTS, MINUTES, Mode, PICKS, Phase, Player, SIDES, Scale, Score, Statement,
     UPDATE, spot,
 };
 use crate::statements::TOPICS;
@@ -284,6 +284,47 @@ pub struct Tally<'a> {
     updated: usize,
 }
 
+/// A statement somebody picked, and how many did.
+#[derive(Serialize)]
+pub struct Picked<'a> {
+    statement: &'a Statement,
+    n: usize,
+}
+
+/// How the picking is going, for the wall.
+#[derive(Serialize)]
+pub struct Picking<'a> {
+    /// How many people have picked at least one statement.
+    pickers: usize,
+    /// How many each person can pick.
+    limit: usize,
+    /// Every statement picked so far, the most picked first: the deck the
+    /// room will play if the picks closed now.
+    picked: Vec<Picked<'a>>,
+}
+
+fn picking(game: &Game) -> Option<Picking<'_>> {
+    if game.phase != Phase::Picking {
+        return None;
+    }
+    let mut picked: Vec<Picked> = game
+        .pick_counts()
+        .into_iter()
+        .filter_map(|(id, n)| {
+            Some(Picked {
+                statement: game.statement(id)?,
+                n,
+            })
+        })
+        .collect();
+    picked.sort_by_key(|p| (std::cmp::Reverse(p.n), p.statement.id));
+    Some(Picking {
+        pickers: game.players.iter().filter(|p| !p.picks.is_empty()).count(),
+        limit: PICKS,
+        picked,
+    })
+}
+
 #[derive(Serialize)]
 pub struct HostView<'a> {
     join: &'a str,
@@ -317,6 +358,8 @@ pub struct HostView<'a> {
     /// How many warm-up questions have been asked.
     warmups: usize,
     calibrated: Vec<Calibrated>,
+    /// In the pick mode, while people are picking.
+    picking: Option<Picking<'a>>,
 }
 
 fn name_of(game: &Game, key: &str) -> String {
@@ -507,6 +550,7 @@ pub fn host(game: &Game) -> HostView<'_> {
         warmup: warm_host(game),
         warmups: game.warmups.len(),
         calibrated: calibrated(game),
+        picking: picking(game),
         contested: pick(&contested_ids),
         shifted: pick(&shifted_ids),
         popular: pick(&popular_ids),
@@ -519,6 +563,8 @@ pub struct Square<'a> {
     answer: Option<i16>,
     first: Option<i16>,
     marked: bool,
+    /// In the pick mode, whether this player picked it.
+    picked: bool,
     /// In the free mode, how many other people have answered it.
     count: usize,
     /// In the free mode, and only once this player has answered it: who
@@ -583,6 +629,8 @@ pub struct PlayerView<'a> {
     score: Score,
     /// In the free mode, the quick-fire feed's next statements, best first.
     next: Vec<u32>,
+    /// In the pick mode, how many statements each person can pick.
+    picks: usize,
     /// Their place on the board, once they have one.
     rank: Option<usize>,
     /// The board's top three, shown when the evening is over.
@@ -682,6 +730,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
                 answer,
                 first: me.first.get(&id).copied(),
                 marked: me.marked.contains(&id),
+                picked: me.picks.contains(&id),
                 count,
                 others,
             })
@@ -779,6 +828,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         awards: if finished { awards(game) } else { Vec::new() },
         warmup: warm_mine(game, key),
         calibration,
+        picks: PICKS,
         next: if free {
             game.feed(me, FEED)
         } else {
