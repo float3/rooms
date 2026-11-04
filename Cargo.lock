@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "estimate"
 version = "0.1.0"
-source = "git+https://github.com/float3/estimate#f281ada852a8365f48c022c84a84a83eb0864750"
+source = "git+https://github.com/float3/estimate#e56fbb6cce1c17d4a49a8ddc10adcee709b1e48c"
 dependencies = [
  "axum",
  "rooms",
@@ -359,7 +359,7 @@ dependencies = [
 [[package]]
 name = "numbers"
 version = "0.1.0"
-source = "git+https://github.com/float3/numbers#fa2b1f085ef46fe437c18a52d532aa6c75ad3251"
+source = "git+https://github.com/float3/numbers#871ee758d7e7fe8ab8d80df73357b04e68a00bab"
 dependencies = [
  "axum",
  "rooms",
@@ -394,7 +394,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "petrov"
 version = "0.1.0"
-source = "git+https://github.com/float3/petrov#736e3344294d7c28397820d32a61318aee6aee07"
+source = "git+https://github.com/float3/petrov#08550ef6994b910b2859419ce37604972e338223"
 dependencies = [
  "argon2",
  "axum",
@@ -716,7 +716,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 [[package]]
 name = "updating"
 version = "0.1.0"
-source = "git+https://github.com/float3/updating#cf3c9681d439c18d30bbde0120ad430dce3a6f0a"
+source = "git+https://github.com/float3/updating#51f7f0d63affa1ee6a5ca5b4246d2938ce5af7d4"
 dependencies = [
  "axum",
  "rooms",
