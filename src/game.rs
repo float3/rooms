@@ -39,6 +39,11 @@ pub const EXTRA_MS: u64 = 60_000;
 pub const UPDATE: i16 = 20;
 /// What one "I learned something from you" is worth on the board.
 pub const KUDOS_POINTS: i32 = 25;
+/// The most one conversation's closing is worth to each partner: one
+/// perfect guess. Answers can be changed between rounds, so without a cap
+/// somebody could exaggerate before a round, answer honestly after it and
+/// run away with the board without anybody changing their mind.
+pub const CLOSE_CAP: i32 = 100;
 /// How much more a statement is worth talking about, in the bingo mode,
 /// for each square already marked in the line it is on...
 const LINE_STEP: i32 = 25;
@@ -333,8 +338,9 @@ pub fn guess_points(s: &Statement, guess: i16, actual: i16) -> i32 {
 /// What somebody's conversations came to, over every round.
 #[derive(Clone, Copy, Default, Serialize)]
 pub struct Score {
-    /// How far apart they and their partners were before, less after: the
-    /// same for everybody in the group, however it closed.
+    /// How far apart they and their partners were before, less after, up
+    /// to `CLOSE_CAP` a conversation: the same for everybody in the group,
+    /// however it closed.
     pub together: i32,
     /// Points for guessing where their partners would land.
     pub listening: i32,
@@ -345,7 +351,8 @@ pub struct Score {
     pub persuaded: i32,
     /// How far they moved towards their partners.
     pub opened: i32,
-    /// The widest gap they closed in one conversation.
+    /// The widest gap they closed in one conversation, as it was, not
+    /// capped: an award, not in the total.
     pub best_closed: i32,
     /// What the board is sorted by: together, listening and kudos.
     pub total: i32,
@@ -1299,7 +1306,7 @@ impl Game {
                 };
                 for m in &g.members {
                     let score = out.entry(m.clone()).or_default();
-                    score.together += closed;
+                    score.together += closed.min(CLOSE_CAP);
                     score.best_closed = score.best_closed.max(closed);
                 }
                 for mover in &g.members {
@@ -1746,6 +1753,20 @@ mod tests {
         assert_eq!(p[&a].persuaded, 60, "still counted, as an award");
         assert_eq!(p[&b].opened, 60);
         assert_eq!(p[&a].total, 60, "persuading is not in the total");
+    }
+
+    #[test]
+    fn closing_more_than_the_cap_scores_the_cap() {
+        let (mut g, a, b, s) = talked();
+        // 120 apart on the shared scale. Both come to 50: 120 closed, but
+        // one conversation is worth at most one perfect guess.
+        g.answer(&a, s, Some(50)).unwrap();
+        g.answer(&b, s, Some(50)).unwrap();
+        let p = g.scores();
+        assert_eq!(p[&a].together, CLOSE_CAP);
+        assert_eq!(p[&b].together, CLOSE_CAP);
+        assert_eq!(p[&a].total, CLOSE_CAP);
+        assert_eq!(p[&a].best_closed, 120, "the award says what was closed");
     }
 
     #[test]

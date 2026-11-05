@@ -76,6 +76,7 @@ interface GroupView {
   gap: number;
   settled: boolean;
   closed: number | null;
+  points: number | null;
 }
 
 interface RoundView {
@@ -624,7 +625,11 @@ function host(key: string): void {
         { className: "note" },
         g.settled && g.closed !== null
           ? `${g.people.map((p) => `${said(g.statement, p.before)} → ${said(g.statement, p.after)}`).join(" · ")} · ${
-              g.closed ? `+${g.closed} points each` : "no closer"
+              !g.closed
+                ? "no closer"
+                : g.points !== null && g.points < g.closed
+                  ? `closed ${g.closed} · +${g.points} points each`
+                  : `+${g.closed} points each`
             }`
           : `${g.people.map((p) => said(g.statement, p.before)).join(" vs ")} · ${gapNote(g)}`,
       ),
@@ -917,7 +922,7 @@ function host(key: string): void {
           el(
             "p",
             { className: "note" },
-            `Points for the gap closed with a partner (the same for both, whoever moved), for guessing where a partner landed (up to 100 a guess), and ${view.kudos_points} each time a partner learned something.`,
+            `Points for the gap closed with a partner (the same for both, whoever moved, up to 100 a conversation), for guessing where a partner landed (up to 100 a guess), and ${view.kudos_points} each time a partner learned something.`,
           ),
           el(
             "ol",
@@ -1674,7 +1679,7 @@ function player(key: string): void {
       el(
         "p",
         { className: "note" },
-        "Points come from closing the gap between you, whoever moved, from guessing well, and from partners who learned something from you.",
+        "Points come from closing the gap between you, whoever moved (up to 100 for one conversation), from guessing well, and from partners who learned something from you.",
       ),
     );
   };

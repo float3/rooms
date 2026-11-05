@@ -12,8 +12,8 @@ use rooms::lobby::Present;
 use serde::Serialize;
 
 use crate::game::{
-    Game, Group, KUDOS_POINTS, MINUTES, Mode, PICKS, Phase, Player, SIDES, Scale, Score, Statement,
-    UPDATE, spot,
+    CLOSE_CAP, Game, Group, KUDOS_POINTS, MINUTES, Mode, PICKS, Phase, Player, SIDES, Scale, Score,
+    Statement, UPDATE, spot,
 };
 use crate::statements::TOPICS;
 use crate::warmup::{self, Stage, bits};
@@ -48,6 +48,8 @@ pub struct GroupView<'a> {
     settled: bool,
     /// How much of the gap they closed, once settled.
     closed: Option<i16>,
+    /// What that closing scored each of them: `closed`, up to `CLOSE_CAP`.
+    points: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -151,7 +153,7 @@ fn awards(game: &Game) -> Vec<Award> {
         "Best conversation",
         "Closed the widest gap in one round",
         (top, names),
-        format!("{} points closed", top),
+        format!("closed a gap of {top}"),
     );
     let (top, names) = best(&|s| s.opened);
     add(
@@ -401,6 +403,7 @@ fn group_view<'a>(game: &'a Game, number: usize, group: &Group) -> Option<GroupV
         .max()
         .unwrap_or(0);
     let (before, after) = group.gaps(statement);
+    let closed = settled.then(|| (before - after).max(0));
     Some(GroupView {
         number,
         spot: spot(number - 1),
@@ -408,7 +411,8 @@ fn group_view<'a>(game: &'a Game, number: usize, group: &Group) -> Option<GroupV
         people,
         gap,
         settled,
-        closed: settled.then(|| (before - after).max(0)),
+        closed,
+        points: closed.map(|c| i32::from(c).min(CLOSE_CAP)),
     })
 }
 

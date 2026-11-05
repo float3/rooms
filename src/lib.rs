@@ -635,6 +635,7 @@ mod tests {
         assert_eq!(group["spot"], "🦊 Fox");
         // 160 apart before, 40 after: 120 closed.
         assert_eq!(group["closed"], 120);
+        assert_eq!(group["points"], 100, "one conversation scores at most 100");
         assert_eq!(group["people"][1]["after"], 20, "Bo's, as it was when done");
         let bo_score = host_view["leaders"]
             .as_array()
