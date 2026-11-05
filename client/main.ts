@@ -33,6 +33,7 @@ import {
   stored,
   showConnection,
   text,
+  waitingLine,
   wall,
   wallButton,
   watch,
@@ -186,6 +187,11 @@ interface Picking {
 }
 
 interface HostView {
+  /** Who has done what the room is waiting on: the warm-up question at
+   *  this stage, or a pick. */
+  done: number[];
+  /** Not connected, not marked away, and not paired or warmed up lately. */
+  away: number[];
   join: string;
   /** The wall's key, for `/w/<key>`. */
   wall: string;
@@ -698,8 +704,8 @@ function host(key: string): void {
               "p",
               { className: "wall-line" },
               w.stage === "before"
-                ? `How likely is it, from the setup alone? ${w.before} of ${plural(view.players.length, "person has", "people have")} answered.`
-                : `Clues are on your phones. Compare with your neighbours, then answer again. ${w.after} of ${view.players.length} answered.`,
+                ? `How likely is it, from the setup alone? ${waitingLine(new Set(view.done), view.people, "answered")}.`
+                : `Clues are on your phones. Compare with your neighbours, then answer again. ${waitingLine(new Set(view.done), view.people, "answered")}.`,
             ),
       );
       return;
@@ -735,7 +741,7 @@ function host(key: string): void {
         el(
           "p",
           { className: "wall-line" },
-          `${p.pickers} of ${plural(view.players.length, "person has", "people have")} picked, ${plural(p.picked.length, "statement", "statements")} so far.`,
+          `${waitingLine(new Set(view.done), view.people, "picked")}. ${plural(p.picked.length, "statement", "statements")} so far.`,
         ),
         p.picked.length
           ? el(
@@ -965,8 +971,15 @@ function host(key: string): void {
     wallButton("wall-button", view.wall);
     text("who", connectedCount(view.people));
     // A removal answers with nothing; the stream brings the new view.
+    // "Not connected" rather than "away": Away here is somebody sitting
+    // rounds out, who is never offered.
     roster("people", view.people, {
       remove: (person) => api("POST", at("/remove"), { id: person.id }),
+      away: {
+        ids: view.away,
+        remove: (ids) => api("POST", at("/remove-away"), { ids }),
+        word: "not connected",
+      },
     });
     text("where", view.rounds ? `Round ${view.rounds}` : "");
     drawSetup(view);

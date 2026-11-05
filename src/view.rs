@@ -365,6 +365,24 @@ pub struct HostView<'a> {
     calibrated: Vec<Calibrated>,
     /// In the pick mode, while people are picking.
     picking: Option<Picking<'a>>,
+    /// The ids of who has done what the room is waiting on now: answered
+    /// the warm-up question at this stage, or picked a statement. Empty
+    /// when nothing is being waited on by person.
+    done: Vec<u32>,
+    /// Not connected, not marked away, and not paired or warmed up
+    /// lately. See `HasLobby::recent` and `rooms::lobby::away`.
+    away: Vec<u32>,
+}
+
+/// See [`HostView::done`].
+fn done(game: &Game) -> Vec<u32> {
+    let did = |p: &Player| match (game.phase, game.warmup()) {
+        (Phase::Warmup, Some(w)) if w.stage == Stage::Before => w.before.contains_key(p.key),
+        (Phase::Warmup, Some(w)) if w.stage == Stage::Clue => w.after.contains_key(p.key),
+        (Phase::Picking, _) => !p.sheet.picks.is_empty(),
+        _ => false,
+    };
+    game.players().filter(|p| did(p)).map(|p| p.id).collect()
 }
 
 /// Somebody's name, or, for somebody the host took out after their group
@@ -562,6 +580,8 @@ pub fn host(game: &Game, now: u64) -> HostView<'_> {
         warmups: game.warmups.len(),
         calibrated: calibrated(game),
         picking: picking(game),
+        done: done(game),
+        away: rooms::lobby::away_ids(game, now),
         contested: pick(&contested_ids),
         shifted: pick(&shifted_ids),
         popular: pick(&popular_ids),
@@ -1082,5 +1102,90 @@ pub fn wall(game: &Game) -> WallView<'_> {
             })
             .collect(),
         awards: if finished { awards(game) } else { Vec::new() },
+    }
+}
+
+#[cfg(test)]
+mod away_tests {
+    use super::*;
+    use crate::game::Round;
+    use rooms::lobby::{PRESENT_MS, away_ids};
+    use rooms::tool::Joinable;
+
+    fn names(game: &Game, ids: &[u32]) -> Vec<String> {
+        game.players()
+            .filter(|p| ids.contains(&p.id))
+            .map(|p| p.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn not_connected_is_offered_unless_paired_warmed_up_or_sitting_out() {
+        let mut g = Game::new(1);
+        g.setup(Mode::Open, Scale::Written, &["mind".into()], "", 3)
+            .unwrap();
+        let s = g.deck.iter().find(|s| !s.chance).unwrap().id;
+        let keys: Vec<String> = ["A", "B", "C", "D", "Ghost", "Resting"]
+            .iter()
+            .map(|n| g.join(n, 1).unwrap())
+            .collect();
+        for (k, v) in keys.iter().zip([7, 1, 6, 2]) {
+            g.answer(k, s, Some(v)).unwrap();
+        }
+        g.set_away(&keys[5], true).unwrap();
+        let later = 1 + PRESENT_MS;
+        assert_eq!(
+            names(&g, &away_ids(&g, later)),
+            ["Ghost"],
+            "before any round, an answer counts, and Resting is sitting out"
+        );
+        g.lobby.touch(&keys[4], later);
+        assert!(away_ids(&g, later).is_empty(), "connected is never offered");
+
+        g.start_round(later).unwrap();
+        let paired: Vec<String> = g.rounds[0]
+            .groups
+            .iter()
+            .flat_map(|g| g.members.clone())
+            .collect();
+        let now = later + PRESENT_MS;
+        let away = names(&g, &away_ids(&g, now));
+        assert!(away.contains(&"Ghost".to_string()), "{away:?}");
+        for key in &paired {
+            let name = g.player(key).unwrap().name.to_string();
+            assert!(!away.contains(&name), "{name} was just paired");
+        }
+        assert!(json_has(&host(&g, now), "\"away\":["));
+
+        // Two rounds later, being paired once is not lately.
+        g.stop().unwrap();
+        for _ in 0..2 {
+            g.rounds.push(Round {
+                started: now,
+                groups: Vec::new(),
+                waiting: Vec::new(),
+            });
+        }
+        assert_eq!(names(&g, &away_ids(&g, now)), ["A", "B", "C", "D", "Ghost"]);
+    }
+
+    #[test]
+    fn a_warm_up_answer_is_what_the_room_waits_on_and_counts_as_playing() {
+        let mut g = Game::new(1);
+        g.setup(Mode::Open, Scale::Written, &["mind".into()], "", 3)
+            .unwrap();
+        let a = g.join("A", 1).unwrap();
+        g.join("B", 1).unwrap();
+        g.start_warmup().unwrap();
+        g.warm_answer(&a, 30).unwrap();
+        let id = g.player(&a).unwrap().id;
+        assert_eq!(done(&g), [id]);
+        assert_eq!(names(&g, &away_ids(&g, 1 + PRESENT_MS)), ["B"]);
+        g.warmup_next().unwrap();
+        assert!(done(&g).is_empty(), "nobody has answered after the clue");
+    }
+
+    fn json_has<T: Serialize>(value: &T, part: &str) -> bool {
+        serde_json::to_string(value).unwrap().contains(part)
     }
 }

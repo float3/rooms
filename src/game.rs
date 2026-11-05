@@ -474,6 +474,35 @@ impl HasLobby for Game {
         }
     }
 
+    /// Whether the host's "Remove N not connected" leaves them be. A
+    /// round here is a pairing round, so somebody is still playing if
+    /// they were paired in the round on now or the one before, or answered
+    /// one of the last two warm-up questions. Before the first round, any
+    /// answer or pick counts. Somebody marked away, by themselves or the
+    /// host, is sitting out on purpose and is never offered: phones sleep
+    /// in pockets, and the host can still remove them one at a time.
+    fn recent(&self, player: &rooms::lobby::Player) -> bool {
+        let key = player.key.as_str();
+        let Some(sheet) = self.sheets.get(key) else {
+            return false;
+        };
+        let paired = self
+            .rounds
+            .iter()
+            .rev()
+            .take(2)
+            .any(|r| r.groups.iter().any(|g| g.members.iter().any(|m| m == key)));
+        let warmed = self
+            .warmups
+            .iter()
+            .rev()
+            .take(2)
+            .any(|w| w.before.contains_key(key) || w.after.contains_key(key));
+        let started =
+            self.rounds.is_empty() && (!sheet.answers.is_empty() || !sheet.picks.is_empty());
+        sheet.away || paired || warmed || started
+    }
+
     /// What the projector shows: see [`crate::view::wall`].
     fn wall_game(&self, _now: u64) -> Value {
         serde_json::to_value(crate::view::wall(self)).unwrap_or_default()
