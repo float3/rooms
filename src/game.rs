@@ -288,18 +288,25 @@ impl Group {
         )
     }
 
-    /// Whether everybody in the group has said where they stand now and
-    /// guessed where their partners do. Until then the wall does not show
-    /// the group's new answers, because the guesses are made blind.
+    /// Whether `key` has said where they stand now and guessed where each
+    /// partner does. From then on they see their partners' new answers,
+    /// and their own is the round's answer as it was then: a change made
+    /// after seeing their partners' would not be a change of mind from
+    /// the conversation.
+    pub fn done(&self, key: &str) -> bool {
+        self.after.contains_key(key)
+            && self
+                .members
+                .iter()
+                .filter(|o| *o != key)
+                .all(|o| self.guesses.get(key).is_some_and(|g| g.contains_key(o)))
+    }
+
+    /// Whether everybody in the group is [`done`](Self::done). Until then
+    /// the wall does not show the group's new answers, because the
+    /// guesses are made blind.
     pub fn settled(&self) -> bool {
-        self.members.iter().all(|m| {
-            self.after.contains_key(m)
-                && self
-                    .members
-                    .iter()
-                    .filter(|o| *o != m)
-                    .all(|o| self.guesses.get(m).is_some_and(|g| g.contains_key(o)))
-        })
+        self.members.iter().all(|m| self.done(m))
     }
 }
 
@@ -758,7 +765,8 @@ impl Game {
 
     /// Records where somebody stands, or clears it. During and after a
     /// round, an answer to the statement they were given counts as their
-    /// answer after the conversation.
+    /// answer after the conversation, until they are done with the round
+    /// ([`Group::done`]); after that it changes only their answer.
     pub fn answer(&mut self, key: &str, id: u32, value: Option<i16>) -> Result<(), &'static str> {
         if self.phase == Phase::Finished {
             return Err("The evening is over.");
@@ -794,6 +802,7 @@ impl Game {
                 .groups
                 .iter_mut()
                 .find(|g| g.statement == id && g.members.iter().any(|m| m == key))
+            && !group.done(key)
         {
             match value {
                 Some(v) => group.after.insert(key.to_string(), v),

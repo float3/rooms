@@ -105,7 +105,11 @@ mind (who moved furthest towards their partners), most persuasive, and
 in the bingo mode, bingo.
 
 the wall shows a pair's new answers only once both of them have answered
-and guessed, because the guesses are made blind.
+and guessed, because the guesses are made blind. a phone shows you your
+partner's new answer only once you have said where you stand and locked
+in your guess, and from then on your answer this round stays as it was:
+you can still change your answer on your card, but not the round's. so
+nobody sets their own number while looking at their partner's.
 
 each pair gets a meeting spot, an animal: "🦊 Fox". it is large on both
 phones and on the wall, so two people can find each other in a full room.

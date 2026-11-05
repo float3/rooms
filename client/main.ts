@@ -225,9 +225,12 @@ interface Square {
 interface Partner {
   name: string;
   answer: number;
+  /** Only once your own guess and answer are in. */
   after: number | null;
   guess: number | null;
   kudos: boolean;
+  /** Whether they are done too, so their answer is final. */
+  done: boolean;
 }
 
 interface Mine {
@@ -237,6 +240,8 @@ interface Mine {
   partners: Partner[];
   before: number;
   after: number | null;
+  /** Your answer and guesses are in: the answer stays as the round's. */
+  done: boolean;
 }
 
 interface Opposite {
@@ -694,7 +699,7 @@ function host(key: string): void {
             : el(
                 "p",
                 { className: "wall-line" },
-                `Phones out: guess where your partner landed, say where you stand, and if you learned something. ${done} of ${plural(view.round.groups.length, "pair", "pairs")} done.`,
+                `Phones out: say where you stand, guess where your partner landed, and if you learned something. ${done} of ${plural(view.round.groups.length, "pair", "pairs")} done.`,
               ),
         ),
         el("div", { className: "pairs" }, ...view.round.groups.map((g) => pairCard(g, view.phase))),
@@ -1468,15 +1473,18 @@ function player(key: string): void {
     );
   };
 
-  /** After a round: guess your partner, say where you stand, and thank. */
+  /** After a round: say where you stand, guess your partner, and thank.
+   *  A partner's new answer is shown only once yours and your guesses
+   *  are in, and from then on yours stays as the round's. */
   const drawAfter = (box: HTMLElement, view: PlayerView, g: Mine): void => {
     const s = g.statement;
     const guesses = g.partners.map((p) => {
       if (p.guess !== null) {
-        const landed =
-          p.after === null
+        const landed = !g.done
+          ? `You see where ${p.name} landed once you have said where you stand.`
+          : p.after === null
             ? `${p.name} has not said yet.`
-            : `${p.name} says ${said(s, p.after)}.`;
+            : `${p.name} says ${said(s, p.after)}${p.done ? "" : ", and may still change it"}.`;
         return el(
           "div",
           { className: "step done" },
@@ -1516,24 +1524,51 @@ function player(key: string): void {
         sentBox(
           "waiting",
           "Not locked in yet",
-          "Your guess counts once you press Lock in, and cannot be changed after that. You see their answer once it is in; the closer, the more points.",
+          "Your guess counts once you press Lock in, and cannot be changed after that. You see their answer once your guess and your own answer are in; the closer, the more points.",
         ),
         el("div", { className: "actions" }, lock),
       );
     });
 
-    const mineValue = el("span", { className: "value" }, said(s, g.after ?? g.before));
-    const mine = slider(s, (v) => run(answer(s.id, v)), mineValue);
-    mine.value = String(g.after ?? g.before);
-    mine.classList.remove("unset");
-    const same = el("button", { type: "button", className: "button" }, "Where I was");
-    same.addEventListener("click", () => run(answer(s.id, g.before)));
-    const standing = pulse(
-      `s${s.id}`,
-      g.after === null
-        ? sentBox("waiting", "Not sent yet", "Move the slider, or press Where I was. It is sent when you let go.")
-        : sentBox("sent", `✓ Sent: ${said(s, g.after)}`, "You can still change it until the host starts the next round."),
-    );
+    const guessed = g.partners.every((p) => p.guess !== null);
+    let standing: (HTMLElement | string)[];
+    if (g.done && g.after !== null) {
+      standing = [
+        pulse(
+          `s${s.id}`,
+          sentBox(
+            "locked",
+            `🔒 Your answer this round: ${said(s, g.after)}`,
+            "It counts as it was when your guess and answer were both in. Changing it on your card now does not change the round.",
+          ),
+        ),
+      ];
+    } else {
+      const mineValue = el("span", { className: "value" }, said(s, g.after ?? g.before));
+      const mine = slider(s, (v) => run(answer(s.id, v)), mineValue);
+      mine.value = String(g.after ?? g.before);
+      mine.classList.remove("unset");
+      const same = el("button", { type: "button", className: "button" }, "Where I was");
+      same.addEventListener("click", () => run(answer(s.id, g.before)));
+      standing = [
+        mine,
+        ends(s),
+        el("div", { className: "row-foot" }, mineValue),
+        pulse(
+          `s${s.id}`,
+          g.after === null
+            ? sentBox(
+                "waiting",
+                "Not sent yet",
+                guessed
+                  ? "Move the slider, or press Where I was. It is sent when you let go, and then it stays as your answer this round."
+                  : "Move the slider, or press Where I was. It is sent when you let go.",
+              )
+            : sentBox("sent", `✓ Sent: ${said(s, g.after)}`, "You can change it until you lock in your guess."),
+        ),
+        el("div", { className: "actions" }, same),
+      ];
+    }
 
     const thanks = g.partners.map((p) => {
       const b = el(
@@ -1550,15 +1585,11 @@ function player(key: string): void {
       el("p", { className: "eyebrow" }, `Round ${view.round} is over · ${g.spot}`),
       el("h2", {}, "Before you go"),
       el("p", { className: "statement" }, s.text),
-      el("h3", {}, "1. Guess"),
-      ...guesses,
-      el("h3", {}, "2. Where do you stand now?"),
+      el("h3", {}, "1. Where do you stand now?"),
       el("p", { className: "note" }, `You started at ${said(s, g.before)}.`),
-      mine,
-      ends(s),
-      el("div", { className: "row-foot" }, mineValue),
-      standing,
-      el("div", { className: "actions" }, same),
+      ...standing,
+      el("h3", {}, g.partners.length > 1 ? "2. Where do they stand?" : `2. Where does ${g.partners[0]?.name ?? "your partner"} stand?`),
+      ...guesses,
       el("h3", {}, "3. Did you learn something?"),
       el("div", { className: "chips" }, ...thanks),
       el(
@@ -1986,7 +2017,7 @@ function wallParts(game: WallGame): (HTMLElement | string)[] {
         { className: "wall-line" },
         talking
           ? "Your phone says where to meet and who to find. Talk about the statement on your spot."
-          : `Phones out: guess where your partner landed, say where you stand now, and whether you learned something. ${r.done} of ${plural(r.people, "person", "people")} done.`,
+          : `Phones out: say where you stand now, guess where your partner landed, and whether you learned something. ${r.done} of ${plural(r.people, "person", "people")} done.`,
       ),
       r.results.length ? el("div", { className: "wall-results" }, ...r.results.map(settledCard)) : "",
       el(

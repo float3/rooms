@@ -584,8 +584,11 @@ pub struct Seen {
 pub struct Partner {
     name: String,
     answer: i16,
-    /// Where they stand now: only once this player has guessed it.
+    /// Where they stand now: only once this player has guessed it and
+    /// said where they stand themselves.
     after: Option<i16>,
+    /// Whether they are done with the round too, so `after` is final.
+    done: bool,
     /// This player's guess at it.
     guess: Option<i16>,
     /// Whether this player said they learned something from them.
@@ -600,6 +603,9 @@ pub struct Mine<'a> {
     partners: Vec<Partner>,
     before: i16,
     after: Option<i16>,
+    /// Whether this player is done with the round: their answer and
+    /// guesses are in, and the answer stays as the round's.
+    done: bool,
 }
 
 #[derive(Serialize)]
@@ -740,6 +746,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         .collect();
     let group = game.group_of(key).and_then(|(i, g)| {
         let guesses = g.guesses.get(key);
+        let done = g.done(key);
         let kudos = g.kudos.get(key);
         Some(Mine {
             number: i + 1,
@@ -754,7 +761,8 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
                     Partner {
                         name: name_of(game, m),
                         answer: g.before.get(m).copied().unwrap_or(0),
-                        after: g.after.get(m).copied().filter(|_| guess.is_some()),
+                        after: g.after.get(m).copied().filter(|_| done),
+                        done: g.done(m),
                         guess,
                         kudos: kudos.is_some_and(|k| k.contains(m)),
                     }
@@ -762,6 +770,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
                 .collect(),
             before: g.before.get(key).copied().unwrap_or(0),
             after: g.after.get(key).copied(),
+            done,
         })
     });
     let waiting = matches!(game.phase, Phase::Talking | Phase::Updating) && group.is_none();

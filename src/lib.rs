@@ -525,7 +525,8 @@ mod tests {
             "the wall waits until both have guessed"
         );
 
-        // Bo cannot see where Ada landed until Bo has guessed it.
+        // Bo cannot see where Ada landed until Bo has guessed it and said
+        // where Bo stands.
         let bo_view = ok(&t.app, "GET", &format!("/api/p/{bo}"), None).await["view"].clone();
         assert!(bo_view["group"]["partners"][0]["after"].is_null());
         let bo_view = ok(
@@ -536,8 +537,12 @@ mod tests {
         )
         .await["view"]
             .clone();
-        assert_eq!(bo_view["group"]["partners"][0]["after"], 40);
+        assert!(
+            bo_view["group"]["partners"][0]["after"].is_null(),
+            "not on the guess alone"
+        );
         assert_eq!(bo_view["group"]["partners"][0]["guess"], 50);
+        assert_eq!(bo_view["group"]["done"], false);
         let (status, _) = call(
             &t.app,
             "PUT",
@@ -546,22 +551,50 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "a guess is final");
+        let bo_view = answer(&t.app, &bo, 0, 20).await["view"].clone();
+        assert_eq!(bo_view["group"]["done"], true);
+        assert_eq!(
+            bo_view["group"]["partners"][0]["after"], 40,
+            "now Bo sees it"
+        );
+        assert_eq!(
+            bo_view["group"]["partners"][0]["done"], false,
+            "Ada is not done"
+        );
+
+        // Done, Bo's answer still changes, and the round's stays.
+        let bo_view = answer(&t.app, &bo, 0, 40).await["view"].clone();
+        assert_eq!(bo_view["group"]["after"], 20, "the round's answer is kept");
+        let square = bo_view["squares"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["statement"]["id"] == 0)
+            .unwrap()
+            .clone();
+        assert_eq!(square["answer"], 40, "and the answer itself moves");
+
+        // Ada has answered and not guessed, so does not see Bo's yet, and
+        // can still change hers.
+        let view = ok(&t.app, "GET", &format!("/api/p/{ada}"), None).await["view"].clone();
+        assert!(view["group"]["partners"][0]["after"].is_null());
+        assert_eq!(
+            answer(&t.app, &ada, 0, 45).await["view"]["group"]["after"],
+            45
+        );
+        answer(&t.app, &ada, 0, 40).await;
 
         // Once everybody has answered and guessed, the wall shows it.
-        ok(
+        let view = ok(
             &t.app,
             "PUT",
             &format!("/api/p/{ada}/guess"),
             Some(json!({"name": "Bo", "value": 15})),
         )
-        .await;
-        ok(
-            &t.app,
-            "PUT",
-            &format!("/api/p/{bo}/answer"),
-            Some(json!({"id": 0, "value": 20})),
-        )
-        .await;
+        .await["view"]
+            .clone();
+        assert_eq!(view["group"]["partners"][0]["after"], 20);
+        assert_eq!(view["group"]["partners"][0]["done"], true);
         ok(
             &t.app,
             "PUT",
@@ -576,6 +609,7 @@ mod tests {
         assert_eq!(group["spot"], "🦊 Fox");
         // 160 apart before, 40 after: 120 closed.
         assert_eq!(group["closed"], 120);
+        assert_eq!(group["people"][1]["after"], 20, "Bo's, as it was when done");
         let bo_score = host_view["leaders"]
             .as_array()
             .unwrap()
