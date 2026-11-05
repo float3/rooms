@@ -664,6 +664,8 @@ const LOBBY_CSS = `
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--mark, #3f8f4f) 30%, transparent);
 }
 .roster .dot.off, .wall-people .dot.off { background: transparent; border: 2px solid var(--body, GrayText); }
+.remove-away { margin: 10px 0 0; }
+.remove-away .note { margin: 6px 0 0; overflow-wrap: anywhere; }
 .roster .remove {
   border: 1px solid var(--border, rgba(127, 127, 127, 0.4)); background: transparent; color: inherit;
   border-radius: 6px; min-height: 40px; padding: 6px 12px; font: inherit; font-size: 0.85em; cursor: pointer;
@@ -774,20 +776,96 @@ export function confirmTap(button: HTMLElement, ask: string, ms = 8000): boolean
 }
 
 /**
+ * Everybody the server says is away, and a button that takes them all
+ * out: see `roster`'s `away`.
+ */
+export interface Away {
+  /** The ids of everybody away, from the game's view (the server's
+   *  `lobby::away_ids`): not connected, and not heard from in the game in
+   *  this round or the one before. Which of the people that is, is the
+   *  game's to say, so it is given rather than worked out here. */
+  ids: number[];
+  /** Takes them out, given the ids the host was shown:
+   *  `api("POST", "/api/h/<key>/remove-away", { ids })`. The server takes
+   *  out only those still away. */
+  remove: (ids: number[]) => Promise<unknown>;
+  /** What they are called on the button: "Remove 3 away" by default. A
+   *  game whose players can mark themselves away says something else. */
+  word?: string;
+}
+
+/**
+ * "Remove 3 away" above a roster: one button for everybody `away`, with
+ * their names under it, asking once more (`confirmTap`) before it takes
+ * them out. Hidden while nobody is. Kept in its own box just before the
+ * roster's, which is made the first time.
+ */
+function removeAway(box: HTMLElement, people: Present[], away: Away): void {
+  let bar = box.previousElementSibling as HTMLElement | null;
+  if (!bar?.classList.contains("remove-away")) {
+    bar = el("div", { className: "remove-away" });
+    box.before(bar);
+  }
+  const ids = new Set(away.ids);
+  const gone = people.filter((p) => ids.has(p.id));
+  const word = away.word ?? "away";
+  const shape = JSON.stringify([word, gone.map((p) => [p.id, p.name])]);
+  if (bar.dataset.shape === shape) return;
+  bar.dataset.shape = shape;
+  bar.hidden = gone.length === 0;
+  if (gone.length === 0) {
+    bar.replaceChildren();
+    return;
+  }
+  const names = list(gone.map((p) => p.name));
+  const button = el("button", {
+    className: "button remove-all",
+    type: "button",
+    textContent: `Remove ${gone.length} ${word}`,
+  });
+  button.addEventListener("click", () => {
+    if (!confirmTap(button, `Remove ${gone.length === 1 ? names : `all ${gone.length}`}? Tap again`)) return;
+    button.disabled = true;
+    away
+      .remove(gone.map((p) => p.id))
+      .then(() => fail(""))
+      .catch(failed)
+      .finally(() => {
+        button.disabled = false;
+      });
+  });
+  bar.replaceChildren(
+    button,
+    el(
+      "p",
+      { className: "note" },
+      `Not connected, and nothing from them this round or the last: ${names}. They stay in the count until you remove them.`,
+    ),
+  );
+}
+
+/**
  * The list of who is in, with a dot for whose phone is connected where
  * the room may see that. Give `remove` on the host's screen and each
  * name gets a button that asks once more and then takes them out: it is
- * given the person, whose `id` is what the server's remove takes. `seat`
- * names a seat ("Country A"). Redrawn only when something in it changed,
- * seat names included, so a button that is asking keeps asking.
+ * given the person, whose `id` is what the server's remove takes. Give
+ * `away` as well and a "Remove 3 away" button above the list takes out
+ * everybody the game says is away at once (see `Away`). `seat` names a
+ * seat ("Country A"). Redrawn only when something in it changed, seat
+ * names included, so a button that is asking keeps asking.
  */
 export function roster(
   where: string | HTMLElement,
   people: Present[],
-  options: { remove?: (person: Present) => Promise<unknown>; seat?: (seat: number) => string } = {},
+  options: {
+    remove?: (person: Present) => Promise<unknown>;
+    seat?: (seat: number) => string;
+    away?: Away;
+  } = {},
 ): void {
   lobbyStyles();
   const box = target(where);
+  if (options.away) removeAway(box, people, options.away);
   const label = (person: Present): string =>
     person.seat !== undefined && options.seat ? options.seat(person.seat) : "";
   const shape = JSON.stringify([
@@ -832,6 +910,42 @@ export function roster(
       return item;
     }),
   );
+}
+
+/** How many people `waitingLine` names before "and N others". */
+const WAITING_NAMES = 5;
+
+/**
+ * The host's progress line: "18 of 25 picked · waiting on Ada, Bo and 3
+ * others · 2 not connected". `done` says who has acted this round, as a
+ * set of ids or a test; `people` is the roster, with whose phone is
+ * connected. It never stops naming people: those whose phones are
+ * connected come first, since they are the ones worth waiting for, up to
+ * five, then a count of the rest, then how many of all those missing are
+ * not connected, so a host can tell a slow room from a room of ghosts.
+ * Nobody leaves the count on their own; the host removes them.
+ */
+export function waitingLine(
+  done: ReadonlySet<number> | ((person: Present) => boolean),
+  people: Present[],
+  verb = "picked",
+): string {
+  const did = typeof done === "function" ? done : (p: Present) => done.has(p.id);
+  const missing = people.filter((p) => !did(p));
+  let line = `${people.length - missing.length} of ${plural(people.length, "person", "people")} ${verb}`;
+  if (missing.length === 0) return line;
+  // Connected first, in the order they joined; the sort is stable.
+  const order = [...missing].sort((a, b) => Number(b.connected === true) - Number(a.connected === true));
+  // "and 1 other" says no more than the name would.
+  const named = order.length <= WAITING_NAMES + 1 ? order : order.slice(0, WAITING_NAMES);
+  const others = order.length - named.length;
+  line += ` · waiting on ${list([
+    ...named.map((p) => p.name),
+    ...(others ? [plural(others, "other", "others")] : []),
+  ])}`;
+  const off = missing.filter((p) => p.connected === false).length;
+  if (off) line += ` · ${off} not connected`;
+  return line;
 }
 
 /** "3 people, 2 connected", for above a roster. Where the room may not
