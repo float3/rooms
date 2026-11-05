@@ -12,6 +12,7 @@ import {
   el,
   esc,
   fail,
+  failed,
   hide,
   html,
   joining,
@@ -166,10 +167,10 @@ function host(key: string): void {
     const tool = button.dataset.tool || null;
     button.disabled = true;
     play(tool)
-      .catch((e: unknown) => {
-        byId("error").textContent = e instanceof Error ? e.message : String(e);
-        byId("error").hidden = false;
-      })
+      // A refusal stays up until the next pick goes through, not for the
+      // rest of the evening.
+      .then(() => fail(""))
+      .catch(failed)
       .finally(() => {
         button.disabled = false;
       });
