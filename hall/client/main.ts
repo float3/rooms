@@ -8,18 +8,28 @@
 import {
   api,
   byId,
+  connectedCount,
+  el,
   esc,
+  fail,
   hide,
   html,
   joining,
   joinLink,
+  keepAwake,
   opening,
   plural,
+  type Present,
   qrInto,
+  roster,
   route,
   show,
+  showConnection,
   showJoin,
+  subscribe,
   text,
+  wall,
+  wallButton,
   watch,
 } from "./rooms";
 
@@ -32,11 +42,15 @@ interface Playing {
   id: string;
   title: string;
   url: string | null;
+  /** Why the game would not take this player. */
+  refused?: string;
 }
 
 interface HostView {
   join: string;
-  people: string[];
+  /** The wall's key, which grants nothing. */
+  wall: string;
+  people: Present[];
   games: Game[];
   playing: Playing | null;
 }
@@ -115,16 +129,17 @@ function host(key: string): void {
     hide("lobby", playing !== null);
     hide("strip", playing === null);
 
-    const count =
-      view.people.length === 0
-        ? "Nobody has joined yet"
-        : `${plural(view.people.length, "person", "people")} in the room`;
+    const count = connectedCount(view.people);
     text("people-count", count);
     text("mini-count", count);
-    html(
-      "people",
-      view.people.map((name) => `<li>${esc(name)}</li>`).join(""),
-    );
+    // In the lobby and, folded away, above a game, where somebody who
+    // has left most often needs taking out.
+    const remove = (name: string) => api("POST", at("/remove"), { name });
+    roster("people", view.people, { remove });
+    roster("strip-roster", view.people, { remove });
+    wallButton("wall-button", view.wall);
+    wallButton("strip-wall", view.wall);
+    hide("strip-people", playing === null);
 
     html(
       "games",
@@ -160,7 +175,8 @@ function host(key: string): void {
       });
   });
 
-  watch<HostView>(at(""), draw);
+  showConnection(watch<HostView>(at(""), draw));
+  void keepAwake();
 }
 
 // ----------------------------------------------------------------- player
@@ -179,17 +195,59 @@ function player(key: string): void {
     text(
       "waiting-count",
       playing && playing.url === null
-        ? `The room is playing ${playing.title}. Joining you in…`
+        ? playing.refused
+          ? `The room is playing ${playing.title}, but it could not take you: ${playing.refused} The host can pick the game again to retry.`
+          : `The room is playing ${playing.title}. Joining you in…`
         : `${plural(view.people, "person is", "people are")} in the room.`,
     );
     aim("player-frame", playing?.url ?? null);
   }
 
-  watch<PlayerView>(at(""), draw);
+  // Taken out, or the room is over: say so, and close the game too, so
+  // a game that does not know yet stops being played from here.
+  showConnection(
+    subscribe<PlayerView>(at(""), at("/events"), draw, () => {
+      aim("player-frame", null);
+      hide("waiting", true);
+      fail(
+        "You are not in this room. The host may have taken you out, or the room has finished. Scan the code again to rejoin.",
+      );
+    }),
+  );
+  void keepAwake();
+}
+
+// ------------------------------------------------------------------- wall
+
+/** What the hall puts on its wall: the game being played, and that
+ *  game's own wall in a frame when it has one. */
+interface WallGame {
+  id: string;
+  title: string;
+  frame: string | null;
+}
+
+function onTheWall(key: string): void {
+  wall<WallGame | null>(key, (game, slot) => {
+    const shape = JSON.stringify(game);
+    if (slot.dataset.shape === shape) return;
+    slot.dataset.shape = shape;
+    if (game === null) {
+      slot.replaceChildren(el("p", { className: "wall-playing" }, "Waiting for the host to pick a game."));
+      return;
+    }
+    const children: Node[] = [el("p", { className: "wall-playing" }, `Playing ${game.title}`)];
+    if (game.frame !== null) {
+      const frame = el("iframe", { className: "wall-frame", title: game.title, src: game.frame });
+      children.push(frame);
+    }
+    slot.replaceChildren(...children);
+  });
 }
 
 const where = route();
 if (where.kind === "host") host(where.key);
 else if (where.kind === "join") joining("hall", where.key);
 else if (where.kind === "player") player(where.key);
+else if (where.kind === "wall") onTheWall(where.key);
 else start();

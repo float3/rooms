@@ -35,7 +35,9 @@ pub struct Files {
 }
 
 /// One page, which picks its screen from the path: `/` opens a room,
-/// `/h/<key>` runs it, `/j/<key>` joins it and `/p/<key>` is a player's.
+/// `/h/<key>` runs it, `/j/<key>` joins it, `/p/<key>` is a player's and
+/// `/w/<key>` is the wall, the read-only screen for a projector (see
+/// [`crate::lobby`]).
 /// Then the icon, the script and the stylesheet, the clock, and QR codes.
 pub fn routes<S: Clone + Send + Sync + 'static>(files: Files) -> Router<S> {
     routes_under(files, "")
@@ -60,6 +62,7 @@ pub fn routes_under<S: Clone + Send + Sync + 'static>(files: Files, base: &str) 
         .route("/h/{key}", get(page))
         .route("/j/{key}", get(page))
         .route("/p/{key}", get(page))
+        .route("/w/{key}", get(page))
         .route("/icon.svg", get(move || async move { icon(files.icon) }))
         .route("/app.js", get(move || async move { script(files.script) }))
         .route(
@@ -210,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_page_is_served_at_every_link_a_phone_might_be_handed() {
-        for path in ["/", "/h/abc", "/j/abc", "/p/abc"] {
+        for path in ["/", "/h/abc", "/j/abc", "/p/abc", "/w/abc"] {
             let (status, kind, body) = get_one(path).await;
             assert_eq!(status, StatusCode::OK, "{path}");
             assert!(kind.starts_with("text/html"), "{path}: {kind}");

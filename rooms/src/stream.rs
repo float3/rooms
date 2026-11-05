@@ -62,6 +62,12 @@ pub fn stream<R: Room>(
         let mut last = String::new();
         let mut last_sent = 0;
         loop {
+            // The phone has gone. Stop now rather than at the next send,
+            // so that whoever it was watching for stops counting as
+            // connected (see `lobby`).
+            if tx.is_closed() {
+                break;
+            }
             let now = now_ms();
             let view = {
                 let mut held = rooms.lock().await;
@@ -100,15 +106,25 @@ pub fn one<R: Room>(
     key: String,
     render: impl Fn(&R) -> Option<String> + Send + 'static,
 ) -> Response {
+    one_at(rooms, key, move |room, _| render(room))
+}
+
+/// [`one`], for a view that depends on the time: who is connected, how
+/// long is left.
+pub fn one_at<R: Room>(
+    rooms: Arc<Rooms<R>>,
+    key: String,
+    render: impl Fn(&R, u64) -> Option<String> + Send + 'static,
+) -> Response {
     stream(rooms.clone(), move |held, now| {
         let room = held.get_mut(&key)?;
         room.seen(now);
         if room.tick(now) {
-            let view = render(room);
+            let view = render(room, now);
             rooms.save(held);
             return view;
         }
-        render(room)
+        render(room, now)
     })
 }
 

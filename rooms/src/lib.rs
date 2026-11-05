@@ -41,6 +41,7 @@
 pub mod http;
 pub mod key;
 mod listen;
+pub mod lobby;
 pub mod qr;
 pub mod site;
 mod store;
@@ -49,7 +50,7 @@ pub mod tool;
 
 pub use listen::{listen, where_it_listens};
 pub use store::{Room, Rooms};
-pub use stream::{one, stream};
+pub use stream::{one, one_at, stream};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

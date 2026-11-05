@@ -1,4 +1,4 @@
-// The browser code the three tools share.
+// The browser code the tools share.
 //
 // A page keeps an event stream open, redraws when the room changes, and
 // posts what the person in front of it did. All three do that the same
@@ -253,9 +253,24 @@ export function opening(button = "open"): void {
 export function joining(ns: string, key: string): void {
   const kept = remembered(ns, key);
   if (kept) {
-    location.replace(here(`/p/${kept}`));
+    // Back to the link this phone was given, unless the host has taken
+    // it out of the room since, in which case it joins afresh.
+    api<unknown>("GET", `/api/p/${encodeURIComponent(kept)}`)
+      .then(() => location.replace(here(`/p/${kept}`)))
+      .catch((e: unknown) => {
+        if (e instanceof Refused && e.status === 404) {
+          forget(ns, key);
+          askName(ns, key);
+        } else {
+          location.replace(here(`/p/${kept}`));
+        }
+      });
     return;
   }
+  askName(ns, key);
+}
+
+function askName(ns: string, key: string): void {
   show("join");
   const at = `/api/j/${encodeURIComponent(key)}`;
   api<{ players: number }>("GET", at)
@@ -268,12 +283,19 @@ export function joining(ns: string, key: string): void {
       );
     })
     .catch(failed);
+  let sending = false;
   onSubmit("name-form", async () => {
-    const body = await api<{ player: string }>("POST", at, {
-      name: byId<HTMLInputElement>("name").value,
-    });
-    remember(ns, key, body.player);
-    location.href = here(`/p/${body.player}`);
+    if (sending) return;
+    sending = true;
+    try {
+      const body = await api<{ player: string }>("POST", at, {
+        name: byId<HTMLInputElement>("name").value,
+      });
+      remember(ns, key, body.player);
+      location.href = here(`/p/${body.player}`);
+    } finally {
+      sending = false;
+    }
   });
 }
 
@@ -291,12 +313,13 @@ export function showJoin(join: string): void {
   qrInto("join-qr", link);
 }
 
-/** Asks the server for the link as a QR code and inserts it. */
-export function qrInto(id: string, link: string): void {
+/** Asks the server for the link as a QR code and inserts it, into the
+ *  element or the element with that id. */
+export function qrInto(where: string | HTMLElement, link: string): void {
   fetch(here("/api/qr"), { method: "POST", body: link })
     .then((response) => (response.ok ? response.text() : ""))
     .then((svg) => {
-      byId(id).innerHTML = svg;
+      target(where).innerHTML = svg;
     })
     .catch(() => {
       /* the link itself is printed above the code */
@@ -399,15 +422,15 @@ export function show(screen: string): void {
   byId(`screen-${screen}`).hidden = false;
 }
 
-export type Kind = "host" | "join" | "player" | "start";
+export type Kind = "host" | "join" | "player" | "wall" | "start";
 
-/** Which of the three links this page was opened with. */
+/** Which of the links this page was opened with. */
 export function route(): { kind: Kind; key: string } {
   const path = location.pathname.startsWith(`${BASE}/`)
     ? location.pathname.slice(BASE.length)
     : location.pathname;
   const parts = path.split("/").filter((part) => part !== "");
-  const kinds: Record<string, Kind> = { h: "host", j: "join", p: "player" };
+  const kinds: Record<string, Kind> = { h: "host", j: "join", p: "player", w: "wall" };
   if (parts.length === 2 && kinds[parts[0]]) {
     return { kind: kinds[parts[0]], key: parts[1] };
   }
@@ -423,6 +446,14 @@ export function remembered(ns: string, key: string): string | null {
     return localStorage.getItem(`${ns}:${key}`);
   } catch {
     return null; // a browser with storage turned off still plays
+  }
+}
+
+export function forget(ns: string, key: string): void {
+  try {
+    localStorage.removeItem(`${ns}:${key}`);
+  } catch {
+    /* nothing kept, nothing to forget */
   }
 }
 
@@ -515,4 +546,268 @@ export function landed(target: string | HTMLElement): void {
   box.classList.remove("just");
   void box.offsetWidth;
   box.classList.add("just");
+}
+
+// ------------------------------------------------------------ the lobby
+//
+// What the server's `rooms::lobby` sends, and the pieces of screen that
+// show it: who is in and connected, the host taking somebody out, the
+// join link with its QR code, and the wall.
+
+/** Somebody in the room, as the host and the wall see them. */
+export interface Present {
+  name: string;
+  connected: boolean;
+  /** The server's clock when their phone was last connected. */
+  seen: number;
+  /** Where the game seated them: a team, a side, a country. */
+  seat?: number;
+}
+
+/** What `/api/w/<key>` sends: the join key for the QR code, everybody,
+ *  and the game's own public part, whatever the game puts there. */
+export interface WallView<G> {
+  join: string;
+  people: Present[];
+  game: G;
+}
+
+/** An element, or the id of one. */
+function target(where: string | HTMLElement): HTMLElement {
+  return typeof where === "string" ? byId(where) : where;
+}
+
+/**
+ * A press that cannot be undone asks again first. The first press turns
+ * the button into the question for a few seconds; a second press within
+ * them answers true. No dialog, so it works the same in the hall's frame
+ * and on a phone held in one hand.
+ *
+ *     if (!confirmTap(button, "Tap again to remove Ada")) return;
+ */
+export function confirmTap(button: HTMLElement, ask: string, ms = 4000): boolean {
+  if (button.dataset.armed === "1") {
+    delete button.dataset.armed;
+    button.classList.remove("armed");
+    if (button.dataset.said !== undefined) button.textContent = button.dataset.said;
+    return true;
+  }
+  button.dataset.armed = "1";
+  button.dataset.said = button.textContent ?? "";
+  button.classList.add("armed");
+  button.textContent = ask;
+  setTimeout(() => {
+    if (button.dataset.armed !== "1") return;
+    delete button.dataset.armed;
+    button.classList.remove("armed");
+    button.textContent = button.dataset.said ?? "";
+  }, ms);
+  return false;
+}
+
+/**
+ * The list of who is in, with a dot for whose phone is connected. Give
+ * `remove` on the host's screen and each name gets a button that asks
+ * once more and then takes them out. `seat` names a seat ("Country A").
+ * Redrawn only when something in it changed, so a button that is asking
+ * keeps asking.
+ */
+export function roster(
+  where: string | HTMLElement,
+  people: Present[],
+  options: { remove?: (name: string) => Promise<unknown>; seat?: (seat: number) => string } = {},
+): void {
+  const box = target(where);
+  const shape = JSON.stringify(people.map((p) => [p.name, p.connected, p.seat]));
+  if (box.dataset.shape === shape) return;
+  box.dataset.shape = shape;
+  box.classList.add("roster");
+  box.replaceChildren(
+    ...people.map((person) => {
+      const dot = el("span", { className: `dot ${person.connected ? "on" : "off"}` });
+      dot.setAttribute("aria-hidden", "true");
+      const state = el("span", { className: "visually-hidden" }, person.connected ? " (connected)" : " (not connected)");
+      const seat =
+        person.seat !== undefined && options.seat
+          ? el("span", { className: "seat" }, options.seat(person.seat))
+          : null;
+      const item = el("li", { className: person.connected ? "" : "away" }, dot, el("span", { className: "who" }, person.name), state, seat);
+      const remove = options.remove;
+      if (remove) {
+        const button = el("button", { className: "remove", type: "button", textContent: "Remove" });
+        button.setAttribute("aria-label", `Remove ${person.name}`);
+        button.addEventListener("click", () => {
+          if (!confirmTap(button, `Remove ${person.name}?`)) return;
+          button.disabled = true;
+          remove(person.name)
+            .catch(failed)
+            .finally(() => {
+              button.disabled = false;
+            });
+        });
+        item.append(button);
+      }
+      return item;
+    }),
+  );
+}
+
+/** "3 of 4 connected", for above a roster. */
+export function connectedCount(people: Present[]): string {
+  if (people.length === 0) return "Nobody has joined yet";
+  const on = people.filter((p) => p.connected).length;
+  return on === people.length
+    ? `${plural(people.length, "person", "people")}, all connected`
+    : `${plural(people.length, "person", "people")}, ${on} connected`;
+}
+
+/**
+ * A link to share: the link itself, a button that copies it, and a
+ * button that shows it as a QR code. For the host who would otherwise
+ * hand-roll all three.
+ */
+export function shareLink(where: string | HTMLElement, url: string): void {
+  const box = target(where);
+  if (box.dataset.url === url) return;
+  box.dataset.url = url;
+  box.classList.add("share");
+  const link = el("a", { className: "link", href: url, textContent: url });
+  const copy = el("button", { className: "button", type: "button", textContent: "Copy link" });
+  copy.addEventListener("click", () => void copyTo(copy, url));
+  const code = el("div", { className: "qr" });
+  code.hidden = true;
+  const toggle = el("button", { className: "button", type: "button", textContent: "Show QR code" });
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.addEventListener("click", () => {
+    code.hidden = !code.hidden;
+    toggle.setAttribute("aria-expanded", String(!code.hidden));
+    toggle.textContent = code.hidden ? "Show QR code" : "Hide QR code";
+    if (!code.hidden && !code.firstChild) qrInto(code, url);
+  });
+  box.replaceChildren(link, el("div", { className: "actions" }, copy, toggle), code);
+}
+
+/** The wall's address, from the wall key the host's view carries. */
+export function wallLink(wall: string): string {
+  return `${location.origin}${BASE}/w/${wall}`;
+}
+
+/**
+ * "Open the wall view" on the host's screen: the read-only page for a
+ * projector, in a new tab. The wall key grants nothing, so the projector
+ * can show its own address. Hidden inside the hall's frame, which has a
+ * wall of its own.
+ */
+export function wallButton(where: string | HTMLElement, wall: string): void {
+  const box = target(where);
+  const url = wallLink(wall);
+  if (box.dataset.url === url) return;
+  box.dataset.url = url;
+  const link = el("a", {
+    className: "button wall-open",
+    href: url,
+    target: "_blank",
+    rel: "noopener",
+    textContent: "Open the wall view",
+  });
+  box.replaceChildren(link, el("p", { className: "note wall-open" }, "For a projector or a TV: the QR code, who is in, and what the game shows the room. Nothing on it can change the game."));
+}
+
+let wakeLock: WakeLockSentinel | null = null;
+let wakeWanted = false;
+
+/**
+ * Keeps the screen on while the page is open: a phone that dims mid-round
+ * drops its stream. Asked for again whenever the page comes back into
+ * view, because browsers let go of it when it is hidden. Answers whether
+ * the screen is being kept on; browsers without it carry on as before.
+ */
+export async function keepAwake(): Promise<boolean> {
+  if (!wakeWanted) {
+    wakeWanted = true;
+    document.addEventListener("visibilitychange", () => void keepAwake());
+  }
+  try {
+    if ("wakeLock" in navigator && document.visibilityState === "visible" && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => {
+        wakeLock = null;
+      });
+    }
+  } catch {
+    /* not supported, or refused */
+  }
+  return wakeLock !== null;
+}
+
+/**
+ * A "Reconnecting…" notice whenever `feed` has stopped hearing from the
+ * server, so nobody answers into a screen that is out of date. Not shown
+ * in the first few seconds, while the page is still connecting.
+ */
+export function showConnection(feed: Feed, ms = 1000): void {
+  const notice = el("p", { className: "reconnecting", textContent: "Reconnecting…" });
+  notice.setAttribute("role", "status");
+  notice.hidden = true;
+  document.body.append(notice);
+  const opened = Date.now();
+  setInterval(() => {
+    notice.hidden = feed.connected() || Date.now() - opened < 4000;
+    document.body.classList.toggle("stale", !notice.hidden);
+  }, ms);
+}
+
+/**
+ * The wall: the read-only screen for a projector. A large QR code and
+ * the join link, who is in with a dot for each connected phone, and a
+ * slot the game draws its public part into with `drawGame`. The screen
+ * is built here, so a page needs nothing for it but a `<main>`.
+ *
+ * Inside the hall's frame, the hall shows the code and the names itself,
+ * so only the game's part is drawn.
+ *
+ *     if (where.kind === "wall") wall<MyWall>(where.key, (game, slot) => ...);
+ */
+export function wall<G>(
+  key: string,
+  drawGame?: (game: G, slot: HTMLElement, feed: Feed) => void,
+  options: { seat?: (seat: number) => string } = {},
+): Feed {
+  document.body.classList.add("wall-screen");
+  const code = el("div", { className: "qr wall-qr" });
+  const link = el("p", { className: "wall-link" });
+  const count = el("p", { className: "eyebrow wall-count" });
+  const people = el("ul", { className: "wall-people" });
+  const slot = el("div", { className: "wall-game", id: "wall-game" });
+  const join = el(
+    "div",
+    { className: "wall-join" },
+    el("p", { className: "eyebrow" }, "Join on your phone"),
+    code,
+    link,
+  );
+  const section = el(
+    "section",
+    { id: "screen-wall" },
+    el("div", { className: "wall" }, join, el("div", { className: "wall-side" }, count, people, slot)),
+  );
+  document.querySelector("main")?.append(section);
+  show("wall");
+  void keepAwake();
+
+  let shown = "";
+  // The first view arrives after a request, so `feed` is set by then.
+  const feed: Feed = watch<WallView<G>>(`/api/w/${encodeURIComponent(key)}`, (view) => {
+    const url = joinLink(view.join);
+    if (shown !== url) {
+      shown = url;
+      qrInto(code, url);
+      link.textContent = url.replace(/^https?:\/\//, "");
+    }
+    count.textContent = connectedCount(view.people);
+    roster(people, view.people, { seat: options.seat });
+    if (drawGame) drawGame(view.game, slot, feed);
+  });
+  showConnection(feed);
+  return feed;
 }
