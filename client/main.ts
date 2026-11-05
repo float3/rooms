@@ -354,8 +354,44 @@ function percentSlider(start: number, unset: boolean, onSend: (v: number) => voi
     input.classList.remove("unset");
     value.textContent = `${input.value}%`;
   });
-  input.addEventListener("change", () => onSend(Number(input.value)));
+  onRelease(input, onSend);
   return [input, value];
+}
+
+/** Calls `onSend` when a slider is let go, and `onEnd` whenever the
+ *  finger leaves it.
+ *
+ *  A range input fires no change event when it is let go where it
+ *  started. Without the release below, a slider tapped where its thumb
+ *  already sits, which is 50% or 4 on one not answered yet, would never
+ *  send, and whatever waits for the change, like a panel that is not
+ *  redrawn under a finger, would wait for good. A touch the browser takes
+ *  over to scroll the page ends the hold and sends nothing. */
+function onRelease(input: HTMLInputElement, onSend: (v: number) => void, onEnd: () => void = () => {}): void {
+  let down = false;
+  input.addEventListener("pointerdown", () => {
+    down = true;
+  });
+  input.addEventListener("pointercancel", () => {
+    down = false;
+    onEnd();
+  });
+  input.addEventListener("change", () => {
+    down = false;
+    onEnd();
+    onSend(Number(input.value));
+  });
+  input.addEventListener("pointerup", () => {
+    // A change, when there is one, comes with the same release, so this
+    // waits for it and only sends when there was none.
+    setTimeout(() => {
+      if (!down) return;
+      down = false;
+      input.dispatchEvent(new Event("input"));
+      onEnd();
+      onSend(Number(input.value));
+    }, 0);
+  });
 }
 
 /** Runs a countdown off the server's clock into every element given. */
@@ -972,9 +1008,8 @@ function player(key: string): void {
       input.classList.remove("unset");
       label.textContent = said(s, Number(input.value));
     });
-    input.addEventListener("change", () => {
+    onRelease(input, onSend, () => {
       holding = null;
-      onSend(Number(input.value));
     });
     return input;
   };
@@ -1454,7 +1489,8 @@ function player(key: string): void {
         guessDraft.set(p.name, Number(input.value));
         value.textContent = said(s, Number(input.value));
       });
-      input.addEventListener("change", () => {
+      // A guess is only sent by the button.
+      onRelease(input, () => {}, () => {
         holding = null;
       });
       const lock = el("button", { type: "button", className: "button primary" }, `Lock in my guess`);
