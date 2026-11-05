@@ -64,7 +64,7 @@ interface PlayerView {
 
 /** One line about each game, for the host choosing between them. */
 const ABOUT: Record<string, string> = {
-  petrov: "Two sides, one missile each, and false alarms that look real.",
+  petrov: "Everyone is split evenly into two countries: one missile each, and false alarms that look real.",
   numbers: "Everyone picks a number, and a rule decides who wins.",
   estimate: "Give a range you are 90% sure of. Learn how sure you should be.",
   updating: "Pair up with whoever disagrees with you most, and talk.",
