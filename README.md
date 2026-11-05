@@ -138,12 +138,20 @@ room.
 
 ## the wall
 
-the facilitator's screen is built for a projector: one slim bar of
-buttons, and below it what the room should look at. the join code and
-who is in; the warm-up question and how it came out; during a round the
-clock and every pair's spot, names and statement; after it, which pairs
-are done; at the end, the prizes. the room's settings and the detailed
-statistics fold away underneath.
+the facilitator's screen has "Open the wall view": a separate page,
+`/w/<key>`, for the projector. it has its own key, which runs nothing, so
+its address can be on the screen. it shows the join code and who is in;
+the warm-up question and, once revealed, how the room answered; during a
+round the clock and every group's spot and statement, but not who is in
+which group; then how many are done, and for each statement whose groups
+have all settled, everybody's answers before and after as unnamed dots;
+the top of the board; at the end, the prizes. it never shows anybody's
+answer next to their name.
+
+the facilitator's own screen has one slim bar of buttons, the same
+overview with names and answers, the join link, and who is in, with a
+dot for whose phone is connected and a button to take somebody out. the
+room's settings and the detailed statistics fold away underneath.
 
 ## statements
 
@@ -164,13 +172,18 @@ nothing serves them back:
 sudo cat /var/lib/private/updating/suggestions.jsonl
 ```
 
-## three links
+## four links
 
 | | |
 | --- | --- |
-| `/h/<key>` | runs the room, and is the screen for the wall. Keep it; it is the only way back in. |
+| `/h/<key>` | runs the room. Keep it; it is the only way back in. |
 | `/j/<key>` | joins it. This is the one on the wall. |
 | `/p/<key>` | one player's own, kept by their phone. |
+| `/w/<key>` | the wall, for a projector. It shows and changes nothing secret. |
+
+a name held by a phone that is connected is refused, so two people
+called Alex stay two people; a phone that kept its link goes straight
+back in. joining and presence are `rooms::lobby`'s.
 
 the key in the link is the only access control: 24 random characters and
 no accounts. see [rooms](https://github.com/float3/rooms) for what that

@@ -13,15 +13,18 @@
 //! statement now. The difference is what the evening is for.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt;
+use std::ops::Deref;
 
-use serde::{Deserialize, Serialize};
+use rooms::lobby::{HasLobby, Lobby};
+use serde::de::{Error, IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 
 use crate::statements::{TOPICS, topic};
 use crate::warmup::{MAX_WARMUPS, Stage, Warmup};
 
-pub const MAX_PLAYERS: usize = 200;
 pub const MAX_ROUNDS: usize = 100;
-pub const MAX_NAME: usize = 32;
 pub const MAX_STATEMENT: usize = 200;
 pub const MAX_CUSTOM: usize = 60;
 /// The sides a bingo card can have.
@@ -165,18 +168,22 @@ impl Statement {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Player {
-    pub key: String,
-    pub name: String,
+/// What the game keeps for one player. Who they are, their name and key,
+/// is in the room's [`Lobby`]; this is kept beside it, by their key.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Sheet {
     /// A bingo card's statements, row by row. Empty in the open mode,
     /// where the whole deck is everybody's.
+    #[serde(default)]
     pub card: Vec<u32>,
     /// Where they stand now, by statement.
+    #[serde(default)]
     pub answers: BTreeMap<u32, i16>,
     /// Where they stood the first time they answered.
+    #[serde(default)]
     pub first: BTreeMap<u32, i16>,
     /// Statements they have talked about, in a round or on their own.
+    #[serde(default)]
     pub marked: BTreeSet<u32>,
     /// Statements they passed on in the quick-fire feed, which it does
     /// not show them again.
@@ -185,6 +192,107 @@ pub struct Player {
     /// In the pick mode, the statements they would like to talk about.
     #[serde(default)]
     pub picks: BTreeSet<u32>,
+}
+
+/// The sheet of somebody the lobby has and the game has no sheet for,
+/// which only a damaged save could make: nothing dealt, nothing answered.
+static BLANK: Sheet = Sheet {
+    card: Vec::new(),
+    answers: BTreeMap::new(),
+    first: BTreeMap::new(),
+    marked: BTreeSet::new(),
+    skipped: BTreeSet::new(),
+    picks: BTreeSet::new(),
+};
+
+/// Somebody in the room as the game sees them: their key and name, from
+/// the lobby, and their sheet.
+#[derive(Clone, Copy)]
+pub struct Player<'a> {
+    pub key: &'a str,
+    pub name: &'a str,
+    pub sheet: &'a Sheet,
+}
+
+impl Deref for Player<'_> {
+    type Target = Sheet;
+    fn deref(&self) -> &Sheet {
+        self.sheet
+    }
+}
+
+/// Everybody's sheets, by key, saved as `sheets`.
+///
+/// Rooms saved before the lobby kept each sheet inside the player's entry
+/// in `players`, which the lobby now reads, dropping the fields it does
+/// not know. So this reads the same saved entries as the lobby, before
+/// it does, and a room saved without `sheets` takes them from `players`.
+/// That is why it is flattened into the game rather than a plain field.
+#[derive(Default)]
+pub struct Sheets(pub BTreeMap<String, Sheet>);
+
+impl Serialize for Sheets {
+    fn serialize<S: Serializer>(&self, to: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = to.serialize_map(Some(1))?;
+        map.serialize_entry("sheets", &self.0)?;
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Sheets {
+    fn deserialize<D: Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
+        struct Look;
+
+        impl<'de> Visitor<'de> for Look {
+            type Value = Sheets;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a saved room")
+            }
+
+            // Read as JSON values first: inside a flattened struct, serde
+            // cannot read a map keyed by numbers, which answers are.
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Sheets, A::Error> {
+                let mut sheets = None;
+                let mut saved = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "sheets" => sheets = Some(map.next_value::<Value>()?),
+                        "players" => saved = Some(map.next_value::<Value>()?),
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                if let Some(sheets) = sheets {
+                    return serde_json::from_value(sheets)
+                        .map(Sheets)
+                        .map_err(Error::custom);
+                }
+                // Saved before the lobby: each player's key with their sheet
+                // beside it, which reads as a sheet that ignores the rest.
+                let saved: Vec<Value> = match saved {
+                    Some(saved) => serde_json::from_value(saved).map_err(Error::custom)?,
+                    None => Vec::new(),
+                };
+                let mut sheets = BTreeMap::new();
+                for player in saved {
+                    let Some(key) = player.get("key").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let key = key.to_string();
+                    let sheet = serde_json::from_value(player).map_err(Error::custom)?;
+                    sheets.insert(key, sheet);
+                }
+                Ok(Sheets(sheets))
+            }
+        }
+
+        // As a map, not a struct: a flattened struct takes the entries it
+        // reads, and `players` has to be left for the lobby.
+        from.deserialize_map(Look)
+    }
 }
 
 /// Two people, sometimes three, and what they were given to talk about.
@@ -288,7 +396,14 @@ pub struct Round {
 
 #[derive(Serialize, Deserialize)]
 pub struct Game {
-    pub join: String,
+    /// Before `lobby`, so that it reads the saved players first: see
+    /// [`Sheets`].
+    #[serde(flatten)]
+    sheets: Sheets,
+    /// Who is in, and the join and wall keys. Flattened, so the saved
+    /// names are `join` and `players` as before.
+    #[serde(flatten)]
+    pub lobby: Lobby,
     pub mode: Mode,
     pub topics: Vec<String>,
     pub custom: Vec<String>,
@@ -299,7 +414,6 @@ pub struct Game {
     pub side: u8,
     pub minutes: u32,
     pub deck: Vec<Statement>,
-    pub players: Vec<Player>,
     pub phase: Phase,
     /// When the round being talked ends.
     pub ends: u64,
@@ -329,6 +443,61 @@ impl rooms::Room for Game {
 
     fn expired(&self, now: u64) -> bool {
         self.last_seen + rooms::DAY_MS < now
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.lobby.keys().collect()
+    }
+}
+
+impl HasLobby for Game {
+    fn lobby(&self) -> &Lobby {
+        &self.lobby
+    }
+
+    fn lobby_mut(&mut self) -> &mut Lobby {
+        &mut self.lobby
+    }
+
+    /// Somebody new: a blank sheet, and in the bingo mode a card.
+    fn arrived(&mut self, key: &str, now: u64) -> Result<Option<u32>, &'static str> {
+        self.sheets.0.insert(key.to_string(), Sheet::default());
+        self.deal(key);
+        self.last_seen = now;
+        Ok(None)
+    }
+
+    /// Taken out by the host. Their sheet goes, so they are not counted or
+    /// paired again, and so does their place in a group of the round that
+    /// is on and has not settled, so that their partners can still finish
+    /// it. A settled group, and earlier rounds, keep them, because their
+    /// partners' points come from those.
+    fn left(&mut self, key: &str) {
+        self.sheets.0.remove(key);
+        if matches!(self.phase, Phase::Talking | Phase::Updating)
+            && let Some(round) = self.rounds.last_mut()
+        {
+            round.waiting.retain(|k| k != key);
+            for g in round.groups.iter_mut().filter(|g| !g.settled()) {
+                g.members.retain(|k| k != key);
+                g.before.remove(key);
+                g.after.remove(key);
+                g.guesses.remove(key);
+                for guessed in g.guesses.values_mut() {
+                    guessed.remove(key);
+                }
+                g.kudos.remove(key);
+                for given in g.kudos.values_mut() {
+                    given.remove(key);
+                }
+            }
+            round.groups.retain(|g| !g.members.is_empty());
+        }
+    }
+
+    /// What the projector shows: see [`crate::view::wall`].
+    fn wall(&self, _now: u64) -> Value {
+        serde_json::to_value(crate::view::wall(self)).unwrap_or_default()
     }
 }
 
@@ -425,15 +594,16 @@ fn statements(topics: &[String], custom: &[String], scale: Scale) -> Vec<Stateme
 
 impl Game {
     pub fn new(now: u64) -> Game {
-        let join = rooms::key::new();
-        let seed = hash(&join) ^ now;
+        let lobby = Lobby::new();
+        let seed = hash(&lobby.join) ^ now;
         let topics: Vec<String> = TOPICS
             .iter()
             .filter(|t| t.default)
             .map(|t| t.key.to_string())
             .collect();
         let mut game = Game {
-            join,
+            sheets: Sheets::default(),
+            lobby,
             mode: Mode::Bingo,
             deck: Vec::new(),
             topics,
@@ -441,7 +611,6 @@ impl Game {
             scale: Scale::Chance,
             side: 4,
             minutes: 5,
-            players: Vec::new(),
             phase: Phase::Answering,
             ends: 0,
             rounds: Vec::new(),
@@ -453,15 +622,29 @@ impl Game {
         game
     }
 
-    pub fn player(&self, key: &str) -> Option<&Player> {
-        self.players.iter().find(|p| p.key == key)
+    /// Everybody in the room, in the order they joined.
+    pub fn players(&self) -> impl Iterator<Item = Player<'_>> {
+        self.lobby.players.iter().map(|p| Player {
+            key: &p.key,
+            name: &p.name,
+            sheet: self.sheets.0.get(&p.key).unwrap_or(&BLANK),
+        })
     }
 
-    fn player_mut(&mut self, key: &str) -> Result<&mut Player, &'static str> {
-        self.players
-            .iter_mut()
-            .find(|p| p.key == key)
-            .ok_or("You are not in this room.")
+    pub fn player(&self, key: &str) -> Option<Player<'_>> {
+        let p = self.lobby.player(key)?;
+        Some(Player {
+            key: &p.key,
+            name: &p.name,
+            sheet: self.sheets.0.get(key).unwrap_or(&BLANK),
+        })
+    }
+
+    fn player_mut(&mut self, key: &str) -> Result<&mut Sheet, &'static str> {
+        if self.lobby.player(key).is_none() {
+            return Err("You are not in this room.");
+        }
+        Ok(self.sheets.0.entry(key.to_string()).or_default())
     }
 
     pub fn statement(&self, id: u32) -> Option<&Statement> {
@@ -469,7 +652,7 @@ impl Game {
     }
 
     /// The statements this player can answer: their card, or the deck.
-    pub fn hand(&self, player: &Player) -> Vec<u32> {
+    pub fn hand(&self, player: Player<'_>) -> Vec<u32> {
         match self.mode {
             Mode::Bingo => player.card.clone(),
             Mode::Open | Mode::Free | Mode::Pick => self.deck.iter().map(|s| s.id).collect(),
@@ -479,7 +662,7 @@ impl Game {
     /// Whether anybody has answered anything. After that the deck stays as
     /// it is, because the answers refer to it.
     pub fn locked(&self) -> bool {
-        !self.rounds.is_empty() || self.players.iter().any(|p| !p.first.is_empty())
+        !self.rounds.is_empty() || self.sheets.0.values().any(|p| !p.first.is_empty())
     }
 
     /// The deck the room plays with. A bingo room takes a sample about
@@ -510,8 +693,8 @@ impl Game {
             s.id = i as u32;
         }
         self.deck = picked;
-        let keys: Vec<String> = self.players.iter().map(|p| p.key.clone()).collect();
-        for p in &mut self.players {
+        let keys: Vec<String> = self.lobby.players.iter().map(|p| p.key.clone()).collect();
+        for p in self.sheets.0.values_mut() {
             p.card.clear();
             p.picks.clear();
         }
@@ -528,7 +711,7 @@ impl Game {
         }
         let size = (self.side as usize).pow(2).min(self.deck.len());
         let mut used = vec![0usize; self.deck.len()];
-        for p in &self.players {
+        for p in self.sheets.0.values() {
             for &id in &p.card {
                 used[id as usize] += 1;
             }
@@ -547,7 +730,7 @@ impl Game {
             r = mix(r);
             card.swap(i, (r % (i as u64 + 1)) as usize);
         }
-        if let Some(p) = self.players.iter_mut().find(|p| p.key == key) {
+        if let Some(p) = self.sheets.0.get_mut(key) {
             p.card = card;
         }
     }
@@ -607,36 +790,6 @@ impl Game {
         }
         self.minutes = minutes;
         Ok(())
-    }
-
-    /// Takes a name and returns the key the phone keeps. A name already in
-    /// the room gets that person's key back, so a phone that lost its key
-    /// can rejoin.
-    pub fn join(&mut self, name: &str, now: u64) -> Result<String, &'static str> {
-        let name = tidy(name, MAX_NAME);
-        if name.is_empty() {
-            return Err("Please give a name, so people can find you.");
-        }
-        if let Some(p) = self.players.iter().find(|p| p.name == name) {
-            return Ok(p.key.clone());
-        }
-        if self.players.len() >= MAX_PLAYERS {
-            return Err("This room is full.");
-        }
-        let key = rooms::key::new();
-        self.players.push(Player {
-            key: key.clone(),
-            name,
-            card: Vec::new(),
-            answers: BTreeMap::new(),
-            first: BTreeMap::new(),
-            marked: BTreeSet::new(),
-            skipped: BTreeSet::new(),
-            picks: BTreeSet::new(),
-        });
-        self.deal(&key);
-        self.last_seen = now;
-        Ok(key)
     }
 
     /// Records where somebody stands, or clears it. During and after a
@@ -708,7 +861,7 @@ impl Game {
     /// skips, keeps two phones from showing the same order. Every fourth
     /// card is instead one that few people have answered, so that new
     /// statements get their first answers too.
-    pub fn feed(&self, player: &Player, n: usize) -> Vec<u32> {
+    pub fn feed(&self, player: Player<'_>, n: usize) -> Vec<u32> {
         let acted = (player.answers.len() + player.skipped.len()) as u64;
         let mine: Vec<&Statement> = player
             .answers
@@ -728,10 +881,9 @@ impl Game {
             }
             // Others' answers on one scale, -1 to 1.
             let theirs: Vec<f64> = self
-                .players
-                .iter()
+                .players()
                 .filter(|p| p.key != player.key)
-                .filter_map(|p| p.answers.get(&s.id))
+                .filter_map(|p| p.sheet.answers.get(&s.id))
                 .map(|&v| s.norm(v))
                 .collect();
             let count = theirs.len();
@@ -742,7 +894,7 @@ impl Game {
                 0.0
             };
             let noise =
-                (mix(hash(&player.key) ^ (s.id as u64) << 20 ^ acted) % 1000) as f64 / 1000.0;
+                (mix(hash(player.key) ^ (s.id as u64) << 20 ^ acted) % 1000) as f64 / 1000.0;
             let score = (1.0 + count as f64).ln() + spread + 0.6 * affinity(&s.topic) + 0.5 * noise;
             scored.push((score, count, s.id));
         }
@@ -797,7 +949,7 @@ impl Game {
     /// How many people picked each statement, by statement.
     pub fn pick_counts(&self) -> BTreeMap<u32, usize> {
         let mut counts = BTreeMap::new();
-        for id in self.players.iter().flat_map(|p| &p.picks) {
+        for id in self.sheets.0.values().flat_map(|p| &p.picks) {
             *counts.entry(*id).or_insert(0) += 1;
         }
         counts
@@ -831,7 +983,7 @@ impl Game {
                 Some(s)
             })
             .collect();
-        for p in &mut self.players {
+        for p in self.sheets.0.values_mut() {
             p.picks = p
                 .picks
                 .iter()
@@ -878,7 +1030,7 @@ impl Game {
         }
         for g in &groups {
             for m in &g.members {
-                if let Some(p) = self.players.iter_mut().find(|p| &p.key == m) {
+                if let Some(p) = self.sheets.0.get_mut(m) {
                     p.marked.insert(g.statement);
                 }
             }
@@ -1012,7 +1164,7 @@ impl Game {
     /// one that brings either of them closer to a line. Disagreement still
     /// leads: a line is worth at most `LINE_DONE` to each of them, against
     /// up to 200 for the widest disagreement.
-    pub fn best_between(&self, a: &Player, b: &Player) -> Option<(u32, i16)> {
+    pub fn best_between(&self, a: Player<'_>, b: Player<'_>) -> Option<(u32, i16)> {
         let mut best: Option<(i32, u32, i16)> = None;
         for (&id, &x) in &a.answers {
             let Some(&y) = b.answers.get(&id) else {
@@ -1112,9 +1264,26 @@ impl Game {
     /// made the evening a debate, and it paid to start from an extreme.
     /// It is still counted, as one award among several.
     pub fn scores(&self) -> BTreeMap<String, Score> {
+        self.scores_of(|_, _| true)
+    }
+
+    /// The same, from only the groups whose result is out: settled, or in
+    /// a round that is over. The wall's board is this, because a total
+    /// that moves as somebody guesses would show the room the guess, and
+    /// the answer it was a guess at, before the group has settled.
+    pub fn revealed_scores(&self) -> BTreeMap<String, Score> {
+        let on = matches!(self.phase, Phase::Talking | Phase::Updating);
+        let last = self.rounds.len().saturating_sub(1);
+        self.scores_of(|round, g| !on || round != last || g.settled())
+    }
+
+    fn scores_of(&self, counts: impl Fn(usize, &Group) -> bool) -> BTreeMap<String, Score> {
         let mut out: BTreeMap<String, Score> = BTreeMap::new();
-        for round in &self.rounds {
+        for (r, round) in self.rounds.iter().enumerate() {
             for g in &round.groups {
+                if !counts(r, g) {
+                    continue;
+                }
                 let Some(s) = self.statement(g.statement) else {
                     continue;
                 };
@@ -1165,7 +1334,7 @@ impl Game {
     /// How much talking about this statement would bring a player closer
     /// to a bingo line: more for a line that is nearly full, most for the
     /// square that completes one. Nothing outside the bingo mode.
-    fn towards_a_line(&self, player: &Player, id: u32) -> i32 {
+    fn towards_a_line(&self, player: Player<'_>, id: u32) -> i32 {
         if self.mode != Mode::Bingo || player.marked.contains(&id) {
             return 0;
         }
@@ -1197,7 +1366,7 @@ impl Game {
     }
 
     /// Whether this player's marked squares make a line, and how many.
-    pub fn lines(&self, player: &Player) -> usize {
+    pub fn lines(&self, player: Player<'_>) -> usize {
         if self.mode != Mode::Bingo {
             return 0;
         }
@@ -1224,11 +1393,7 @@ impl Game {
 /// possible matching, but it gives the most opposed pairs the evening's
 /// best conversations, which is the point.
 fn pair(game: &Game, met: &HashSet<(String, String)>) -> (Vec<Group>, Vec<String>) {
-    let people: Vec<&Player> = game
-        .players
-        .iter()
-        .filter(|p| !p.answers.is_empty())
-        .collect();
+    let people: Vec<Player> = game.players().filter(|p| !p.answers.is_empty()).collect();
     let mut candidates: Vec<(i32, usize, usize, u32)> = Vec::new();
     for i in 0..people.len() {
         for j in i + 1..people.len() {
@@ -1237,7 +1402,7 @@ fn pair(game: &Game, met: &HashSet<(String, String)>) -> (Vec<Group>, Vec<String
                 continue;
             };
             let fresh = !a.marked.contains(&id) && !b.marked.contains(&id);
-            let again = met.contains(&(a.key.clone(), b.key.clone()));
+            let again = met.contains(&(a.key.to_string(), b.key.to_string()));
             let score = gap as i32 + if fresh { 300 } else { 0 } - if again { 10_000 } else { 0 };
             candidates.push((score, i, j, id));
         }
@@ -1300,11 +1465,11 @@ fn pair(game: &Game, met: &HashSet<(String, String)>) -> (Vec<Group>, Vec<String
     for (i, j, id) in chosen {
         let (a, b) = (people[i], people[j]);
         groups.push(Group {
-            members: vec![a.key.clone(), b.key.clone()],
+            members: vec![a.key.to_string(), b.key.to_string()],
             statement: id,
             before: BTreeMap::from([
-                (a.key.clone(), a.answers[&id]),
-                (b.key.clone(), b.answers[&id]),
+                (a.key.to_string(), a.answers[&id]),
+                (b.key.to_string(), b.answers[&id]),
             ]),
             after: BTreeMap::new(),
             guesses: BTreeMap::new(),
@@ -1333,18 +1498,17 @@ fn pair(game: &Game, met: &HashSet<(String, String)>) -> (Vec<Group>, Vec<String
         match best {
             Some((_, gi)) => {
                 let g = &mut groups[gi];
-                g.before.insert(p.key.clone(), p.answers[&g.statement]);
-                g.members.push(p.key.clone());
+                g.before.insert(p.key.to_string(), p.answers[&g.statement]);
+                g.members.push(p.key.to_string());
             }
-            None => waiting.push(p.key.clone()),
+            None => waiting.push(p.key.to_string()),
         }
     }
     // People who answered nothing wait too, and are told why.
     waiting.extend(
-        game.players
-            .iter()
+        game.players()
             .filter(|p| p.answers.is_empty())
-            .map(|p| p.key.clone()),
+            .map(|p| p.key.to_string()),
     );
     (groups, waiting)
 }
@@ -1352,6 +1516,7 @@ fn pair(game: &Game, met: &HashSet<(String, String)>) -> (Vec<Group>, Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rooms::tool::Joinable;
 
     fn room(mode: Mode) -> Game {
         let mut g = Game::new(1);
@@ -1368,7 +1533,7 @@ mod tests {
             g.join(&format!("P{n}"), 1).unwrap();
         }
         let mut used = vec![0; g.deck.len()];
-        for p in &g.players {
+        for p in g.players() {
             assert_eq!(p.card.len(), 9);
             let distinct: BTreeSet<_> = p.card.iter().collect();
             assert_eq!(distinct.len(), 9, "no square twice");
@@ -1817,7 +1982,7 @@ mod tests {
         let a = g.join("A", 1).unwrap();
         let b = g.join("B", 1).unwrap();
         let c = g.join("C", 1).unwrap();
-        g.join("D", 1).unwrap();
+        let d = g.join("D", 1).unwrap();
         for id in [9, 4, 7] {
             g.pick(&a, id, true).unwrap();
         }
@@ -1835,7 +2000,6 @@ mod tests {
         );
         assert!(g.deck.iter().enumerate().all(|(i, s)| s.id == i as u32));
         assert_eq!(g.player(&a).unwrap().picks, BTreeSet::from([0, 1, 3]));
-        let d = g.join("D", 1).unwrap();
         assert_eq!(
             g.hand(g.player(&d).unwrap()).len(),
             4,

@@ -4,9 +4,11 @@
 //! whoever disagrees with them most, a few minutes at a time, and says
 //! where they stand afterwards.
 //!
-//! Three kinds of link, and the key in each is the only authority there
-//! is: `/h/<key>` runs the room, `/j/<key>` joins it, and `/p/<key>`
-//! belongs to one player.
+//! Four kinds of link, and the key in each is the only authority there
+//! is: `/h/<key>` runs the room, `/j/<key>` joins it, `/p/<key>` belongs
+//! to one player, and `/w/<key>` is the wall, a read-only screen for a
+//! projector. Joining, who is connected, the host taking somebody out and
+//! the wall's frame are `rooms::lobby`'s.
 
 pub mod game;
 mod statements;
@@ -21,12 +23,12 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{FromRef, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use rooms::{Room, Rooms, http, now_ms, site};
+use rooms::{Room, Rooms, http, lobby, now_ms, site};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
@@ -52,6 +54,13 @@ struct App {
     suggestions: Arc<Mutex<PathBuf>>,
 }
 
+/// So that the lobby's own handlers can be routed here.
+impl FromRef<App> for Arc<Rooms<Game>> {
+    fn from_ref(app: &App) -> Self {
+        app.rooms.clone()
+    }
+}
+
 /// Applies a facilitator's action and answers with their whole view.
 async fn act(
     app: &App,
@@ -65,39 +74,32 @@ async fn act(
             game.tick(now);
             action(game, now)
         },
-        |game, now| http::envelope(now, &view::host(game)),
+        |game, now| http::envelope(now, &view::host(game, now)),
     )
     .await
 }
 
-/// The same for a player: finds their room by their key, then acts.
+/// The same for a player, found by their key, answering with their view.
 async fn act_as(
     app: &App,
     key: &str,
-    action: impl FnOnce(&mut Game, u64) -> Result<(), &'static str>,
+    action: impl FnOnce(&mut Game, &str, u64) -> Result<(), &'static str>,
 ) -> Response {
-    let Some(room) = app
-        .rooms
-        .find(|room, game| game.player(key).map(|_| room.to_string()))
-        .await
-    else {
-        return http::gone();
-    };
-    let done = app
-        .rooms
-        .with(&room, |game, now| {
+    lobby::act_as(
+        &app.rooms,
+        key,
+        |game, key, now| {
             game.tick(now);
-            action(game, now)?;
-            view::player(game, key)
-                .map(|v| http::envelope(now, &v))
-                .ok_or("You are not in this room.")
-        })
-        .await;
-    match done {
-        None => http::gone(),
-        Some(Err(message)) => http::refused(message),
-        Some(Ok(body)) => http::json(body),
-    }
+            action(game, key, now)
+        },
+        |game, key, now| http::envelope(now, &view::player(game, key)),
+    )
+    .await
+}
+
+/// A player's view as JSON, for their page and their stream.
+fn mine(game: &Game, key: &str, _now: u64) -> Option<String> {
+    serde_json::to_string(&view::player(game, key)?).ok()
 }
 
 #[derive(Deserialize)]
@@ -114,11 +116,6 @@ struct Setup {
 #[derive(Deserialize)]
 struct Minutes {
     minutes: u32,
-}
-
-#[derive(Deserialize)]
-struct Named {
-    name: String,
 }
 
 #[derive(Deserialize)]
@@ -171,7 +168,12 @@ struct Suggestion {
 
 async fn open_room(State(app): State<App>) -> Response {
     let now = now_ms();
-    site::open(&app.rooms, |_| Game::new(now), |game| game.join.clone()).await
+    site::open(
+        &app.rooms,
+        |_| Game::new(now),
+        |game| game.lobby.join.clone(),
+    )
+    .await
 }
 
 async fn host_state(State(app): State<App>, Path(key): Path<String>) -> Response {
@@ -179,8 +181,8 @@ async fn host_state(State(app): State<App>, Path(key): Path<String>) -> Response
 }
 
 async fn host_events(State(app): State<App>, Path(key): Path<String>) -> Response {
-    rooms::one(app.rooms, key, |game| {
-        serde_json::to_string(&view::host(game)).ok()
+    rooms::one_at(app.rooms, key, |game, now| {
+        serde_json::to_string(&view::host(game, now)).ok()
     })
 }
 
@@ -228,15 +230,15 @@ async fn warmup_end(State(app): State<App>, Path(key): Path<String>) -> Response
 }
 
 async fn guess(State(app): State<App>, Path(key): Path<String>, Json(g): Json<Guess>) -> Response {
-    act_as(&app, &key, |game, _| game.guess(&key, &g.name, g.value)).await
+    act_as(&app, &key, |game, key, _| game.guess(key, &g.name, g.value)).await
 }
 
 async fn kudos(State(app): State<App>, Path(key): Path<String>, Json(k): Json<Kudos>) -> Response {
-    act_as(&app, &key, |game, _| game.kudos(&key, &k.name, k.given)).await
+    act_as(&app, &key, |game, key, _| game.kudos(key, &k.name, k.given)).await
 }
 
 async fn warm(State(app): State<App>, Path(key): Path<String>, Json(w): Json<Warm>) -> Response {
-    act_as(&app, &key, |game, _| game.warm_answer(&key, w.value)).await
+    act_as(&app, &key, |game, key, _| game.warm_answer(key, w.value)).await
 }
 
 async fn finish(State(app): State<App>, Path(key): Path<String>) -> Response {
@@ -247,48 +249,14 @@ async fn reopen(State(app): State<App>, Path(key): Path<String>) -> Response {
     act(&app, &key, |game, _| game.reopen()).await
 }
 
-async fn join(
-    State(app): State<App>,
-    Path(join): Path<String>,
-    Json(named): Json<Named>,
-) -> Response {
-    let Some(key) = app.rooms.key_where(|game| game.join == join).await else {
-        return http::gone();
-    };
-    match app
-        .rooms
-        .with(&key, |game, now| game.join(&named.name, now))
-        .await
-    {
-        None => http::gone(),
-        Some(Err(message)) => http::refused(message),
-        Some(Ok(player)) => Json(serde_json::json!({ "player": player })).into_response(),
-    }
-}
-
-async fn whose(State(app): State<App>, Path(join): Path<String>) -> Response {
-    let Some(key) = app.rooms.key_where(|game| game.join == join).await else {
-        return http::gone();
-    };
-    match app.rooms.read(&key, |game, _| game.players.len()).await {
-        Some(players) => Json(serde_json::json!({ "players": players })).into_response(),
-        None => http::gone(),
-    }
-}
-
 async fn player_state(State(app): State<App>, Path(key): Path<String>) -> Response {
-    act_as(&app, &key, |_, _| Ok(())).await
+    lobby::player_state(&app.rooms, &key, mine).await
 }
 
+/// The player's stream. While it is open they count as connected, and it
+/// ends a round on the clock even when the host's screen is closed.
 async fn player_events(State(app): State<App>, Path(key): Path<String>) -> Response {
-    rooms::stream(app.rooms, move |held, now| {
-        let game = held.values_mut().find(|game| game.player(&key).is_some())?;
-        game.last_seen = now;
-        // The clock ends a round even when the facilitator's screen is
-        // closed. Saved by the next request, like everything a watcher sees.
-        game.tick(now);
-        serde_json::to_string(&view::player(game, &key)?).ok()
-    })
+    lobby::player_events(app.rooms, key, mine).await
 }
 
 async fn answer(
@@ -296,32 +264,19 @@ async fn answer(
     Path(key): Path<String>,
     Json(a): Json<Answer>,
 ) -> Response {
-    let player = key.clone();
-    act_as(&app, &key, move |game, _| {
-        game.answer(&player, a.id, a.value)
-    })
-    .await
+    act_as(&app, &key, |game, key, _| game.answer(key, a.id, a.value)).await
 }
 
 async fn mark(State(app): State<App>, Path(key): Path<String>, Json(m): Json<Mark>) -> Response {
-    let player = key.clone();
-    act_as(&app, &key, move |game, _| {
-        game.mark(&player, m.id, m.marked)
-    })
-    .await
+    act_as(&app, &key, |game, key, _| game.mark(key, m.id, m.marked)).await
 }
 
 async fn pick(State(app): State<App>, Path(key): Path<String>, Json(p): Json<Pick>) -> Response {
-    let player = key.clone();
-    act_as(&app, &key, move |game, _| {
-        game.pick(&player, p.id, p.picked)
-    })
-    .await
+    act_as(&app, &key, |game, key, _| game.pick(key, p.id, p.picked)).await
 }
 
 async fn skip(State(app): State<App>, Path(key): Path<String>, Json(s): Json<Skip>) -> Response {
-    let player = key.clone();
-    act_as(&app, &key, move |game, _| game.skip(&player, s.id)).await
+    act_as(&app, &key, |game, key, _| game.skip(key, s.id)).await
 }
 
 /// Keeps a statement somebody would like added, one JSON line each, for
@@ -367,6 +322,8 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
     };
     Router::new()
         .merge(site::routes_under(FILES, base))
+        // Joining, the host taking somebody out, and the wall.
+        .merge(lobby::routes::<Game, App>())
         .route("/api/suggest", post(suggest))
         .route("/api/rooms", post(open_room))
         .route("/api/h/{key}", get(host_state))
@@ -382,7 +339,6 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
         .route("/api/h/{key}/warmup", post(warmup))
         .route("/api/h/{key}/warmup/next", post(warmup_next))
         .route("/api/h/{key}/warmup/end", post(warmup_end))
-        .route("/api/j/{key}", get(whose).post(join))
         .route("/api/p/{key}", get(player_state))
         .route("/api/p/{key}/events", get(player_events))
         .route("/api/p/{key}/answer", put(answer))
@@ -396,14 +352,35 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
 }
 
 /// A room joined from the shared room, which joins everybody in it by
-/// name.
+/// name, and back in by the key this room gave them before.
 impl rooms::tool::Joinable for Game {
     fn open(now: u64) -> Self {
         Game::new(now)
     }
 
     fn join(&mut self, name: &str, now: u64) -> Result<String, &'static str> {
-        Game::join(self, name, now)
+        lobby::admit(self, name, None, now)
+    }
+
+    fn rejoin(
+        &mut self,
+        known: Option<&str>,
+        name: &str,
+        now: u64,
+    ) -> Result<String, &'static str> {
+        lobby::admit(self, name, known, now)
+    }
+
+    fn leave(&mut self, key: &str) -> bool {
+        if self.lobby.remove(key).is_none() {
+            return false;
+        }
+        lobby::HasLobby::left(self, key);
+        true
+    }
+
+    fn wall(&self) -> Option<&str> {
+        Some(&self.lobby.wall)
     }
 }
 
@@ -884,6 +861,7 @@ mod tests {
             "/h/abc",
             "/j/abc",
             "/p/abc",
+            "/w/abc",
             "/app.js",
             "/app.css",
             "/icon.svg",
@@ -892,5 +870,315 @@ mod tests {
             let response = t.app.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{uri}");
         }
+    }
+
+    async fn answer(app: &Router, key: &str, id: u32, value: i16) -> Value {
+        ok(
+            app,
+            "PUT",
+            &format!("/api/p/{key}/answer"),
+            Some(json!({"id": id, "value": value})),
+        )
+        .await
+    }
+
+    async fn join(app: &Router, join: &str, body: Value) -> (StatusCode, Value) {
+        call(app, "POST", &format!("/api/j/{join}"), Some(body)).await
+    }
+
+    async fn join_key(app: &Router, host: &str) -> String {
+        ok(app, "GET", &format!("/api/h/{host}"), None).await["view"]["join"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_name_in_use_is_refused_and_a_kept_key_gets_back_in() {
+        let t = test("names");
+        let (host, ada, _) = ready(&t.app).await;
+        let code = join_key(&t.app, &host).await;
+
+        let (status, body) = join(&t.app, &code, json!({"name": " ada "})).await;
+        assert_eq!(status, StatusCode::CONFLICT, "Ada's phone is connected");
+        assert!(body["error"].as_str().unwrap().contains("taken"));
+
+        let (status, body) = join(&t.app, &code, json!({"name": "Ada", "key": ada})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["player"],
+            ada.as_str(),
+            "her own key, kept by her phone"
+        );
+
+        let (status, body) = join(&t.app, &code, json!({"name": "Cy"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_ne!(body["player"], ada.as_str());
+        let count = ok(&t.app, "GET", &format!("/api/j/{code}"), None).await;
+        assert_eq!(count["players"], 3);
+
+        let host_view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        let people = host_view["people"].as_array().unwrap();
+        assert_eq!(people.len(), 3);
+        assert_eq!(people[0]["name"], "Ada");
+        assert_eq!(people[0]["connected"], true);
+        assert!(
+            !host_view["people"].to_string().contains(&ada),
+            "the roster carries no keys"
+        );
+    }
+
+    #[tokio::test]
+    async fn somebody_the_host_removed_is_gone_and_not_paired_again() {
+        let t = test("remove");
+        let (host, ada, bo) = ready(&t.app).await;
+        answer(&t.app, &ada, 0, 90).await;
+        answer(&t.app, &bo, 0, 10).await;
+
+        let removed = ok(
+            &t.app,
+            "POST",
+            &format!("/api/h/{host}/remove"),
+            Some(json!({"name": "bo"})),
+        )
+        .await;
+        assert_eq!(removed["view"]["people"][0]["name"], "Ada");
+        assert_eq!(removed["view"]["people"].as_array().unwrap().len(), 1);
+
+        let (status, _) = call(&t.app, "GET", &format!("/api/p/{bo}"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "Bo's link is dead");
+        let (status, _) = call(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{bo}/answer"),
+            Some(json!({"id": 1, "value": 50})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "and answers nothing");
+        let (status, _) = call(
+            &t.app,
+            "POST",
+            &format!("/api/h/{ada}/remove"),
+            Some(json!({"name": "Ada"})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "a player cannot remove anybody"
+        );
+
+        let code = join_key(&t.app, &host).await;
+        let (_, body) = join(&t.app, &code, json!({"name": "Cy"})).await;
+        let cy = body["player"].as_str().unwrap().to_string();
+        answer(&t.app, &cy, 0, 40).await;
+        let view = ok(&t.app, "POST", &format!("/api/h/{host}/round"), None).await["view"].clone();
+        assert_eq!(view["round"]["groups"].as_array().unwrap().len(), 1);
+        assert_eq!(view["round"]["groups"][0]["people"][0]["name"], "Ada");
+        assert_eq!(view["round"]["groups"][0]["people"][1]["name"], "Cy");
+        assert!(
+            !view.to_string().contains("\"Bo\""),
+            "Bo is not paired or listed"
+        );
+        assert_eq!(view["answers"], 2, "and Bo's answer no longer counts");
+
+        let (status, body) = join(&t.app, &code, json!({"name": "Bo"})).await;
+        assert_eq!(status, StatusCode::OK, "the name is free again");
+        assert_ne!(body["player"], bo.as_str(), "under a new key");
+    }
+
+    #[tokio::test]
+    async fn somebody_removed_mid_round_leaves_their_partner_able_to_finish() {
+        let t = test("remove-mid");
+        let (host, ada, bo) = ready(&t.app).await;
+        answer(&t.app, &ada, 0, 90).await;
+        answer(&t.app, &bo, 0, 10).await;
+        ok(&t.app, "POST", &format!("/api/h/{host}/round"), None).await;
+        ok(
+            &t.app,
+            "POST",
+            &format!("/api/h/{host}/remove"),
+            Some(json!({"name": "Bo"})),
+        )
+        .await;
+        ok(&t.app, "POST", &format!("/api/h/{host}/stop"), None).await;
+        answer(&t.app, &ada, 0, 70).await;
+        let host_view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        let group = &host_view["round"]["groups"][0];
+        assert_eq!(group["people"].as_array().unwrap().len(), 1);
+        assert_eq!(group["settled"], true, "Ada has nobody left to guess");
+    }
+
+    #[tokio::test]
+    async fn the_wall_shows_nobodys_answer_until_their_group_has_settled() {
+        let t = test("wall");
+        let (host, ada, bo) = ready(&t.app).await;
+        let host_view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        let wall = host_view["wall"].as_str().unwrap().to_string();
+        let code = host_view["join"].as_str().unwrap().to_string();
+        answer(&t.app, &ada, 0, 93).await;
+        answer(&t.app, &bo, 0, 7).await;
+
+        let secrets = [host.as_str(), ada.as_str(), bo.as_str()];
+        let look = |view: &Value| {
+            let all = view.to_string();
+            for secret in secrets {
+                assert!(!all.contains(secret), "a key on the wall: {all}");
+            }
+            // Without the clock, whose digits could be anything.
+            let mut game = view["view"]["game"].clone();
+            game.as_object_mut().unwrap().remove("ends");
+            let text = game.to_string();
+            for name in ["Ada", "Bo"] {
+                assert!(!text.contains(name), "a name in the game's part: {text}");
+            }
+            assert!(!text.contains("93"), "an answer on the wall: {text}");
+            game
+        };
+
+        let view = ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await;
+        assert_eq!(view["view"]["join"], code.as_str(), "the code to join by");
+        assert_eq!(view["view"]["people"].as_array().unwrap().len(), 2);
+        let game = look(&view);
+        assert_eq!(game["people"], 2);
+        assert_eq!(game["answering"], 2);
+        assert!(game["round"].is_null());
+
+        ok(&t.app, "POST", &format!("/api/h/{host}/round"), None).await;
+        let game = look(&ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await);
+        let round = &game["round"];
+        assert_eq!(round["number"], 1);
+        assert_eq!(round["on"], true);
+        assert_eq!(round["meetings"][0]["spot"], "🦊 Fox");
+        assert_eq!(round["meetings"][0]["statement"]["id"], 0);
+        assert_eq!(round["people"], 2);
+        assert_eq!(round["done"], 0);
+        assert!(round["results"].as_array().unwrap().is_empty());
+
+        // Ada has answered and guessed; Bo has not, so nothing is out.
+        ok(&t.app, "POST", &format!("/api/h/{host}/stop"), None).await;
+        answer(&t.app, &ada, 0, 60).await;
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{ada}/guess"),
+            Some(json!({"name": "Bo", "value": 20})),
+        )
+        .await;
+        let game = look(&ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await);
+        assert_eq!(game["round"]["done"], 1);
+        assert!(game["round"]["results"].as_array().unwrap().is_empty());
+        assert!(!game.to_string().contains("60"), "nor Ada's new answer");
+
+        answer(&t.app, &bo, 0, 30).await;
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{bo}/guess"),
+            Some(json!({"name": "Ada", "value": 50})),
+        )
+        .await;
+        let game = ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await["view"]["game"].clone();
+        let result = &game["round"]["results"][0];
+        assert_eq!(result["before"], json!([7, 93]), "sorted, so nobody's");
+        assert_eq!(result["after"], json!([30, 60]));
+        assert_eq!(result["closed"], 112, "172 apart, then 60");
+        assert!(game["board"][0]["name"].is_string());
+        assert!(
+            game["board"][0].get("listening").is_none(),
+            "the board is names and totals"
+        );
+
+        // The wall key runs nothing, and the other keys open no wall.
+        for uri in [format!("/api/h/{wall}"), format!("/api/p/{wall}")] {
+            let (status, _) = call(&t.app, "GET", &uri, None).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        }
+        let (status, _) = call(
+            &t.app,
+            "POST",
+            &format!("/api/h/{wall}/remove"),
+            Some(json!({"name": "Ada"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        for key in [&host, &code, &ada] {
+            let (status, _) = call(&t.app, "GET", &format!("/api/w/{key}"), None).await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_wall_keeps_a_warm_up_answer_until_it_is_revealed() {
+        let t = test("wall-warm");
+        let (host, ada, _) = ready(&t.app).await;
+        let wall = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"]["wall"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        ok(&t.app, "POST", &format!("/api/h/{host}/warmup"), None).await;
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{ada}/warm"),
+            Some(json!({"value": 83})),
+        )
+        .await;
+        ok(&t.app, "POST", &format!("/api/h/{host}/warmup/next"), None).await;
+        let game = ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await["view"]["game"].clone();
+        let warm = &game["warmup"];
+        assert_eq!(warm["stage"], "clue");
+        assert_eq!(warm["before"], 1);
+        assert!(warm["outcome"].is_null(), "no truth, no answers");
+        assert!(!game.to_string().contains("truth"));
+        assert!(!warm.to_string().contains("answers"));
+        assert!(!game.to_string().contains("clue\":\""), "nobody's clue");
+
+        ok(&t.app, "POST", &format!("/api/h/{host}/warmup/next"), None).await;
+        let game = ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await["view"]["game"].clone();
+        assert!(game["warmup"]["outcome"]["truth"].is_boolean());
+        assert!(!game["warmup"]["board"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_room_saved_before_the_lobby_loads_with_its_answers() {
+        let t = test("old-save");
+        let (host, ada, _) = ready(&t.app).await;
+        answer(&t.app, &ada, 3, 64).await;
+
+        // Back to how rooms were saved before: each player's card and
+        // answers inside their entry in `players`, and no wall key.
+        let mut saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&t.files[0]).unwrap()).unwrap();
+        let room = saved[&host].as_object_mut().unwrap();
+        let sheets = room.remove("sheets").unwrap();
+        room.remove("wall");
+        for p in room["players"].as_array_mut().unwrap() {
+            let p = p.as_object_mut().unwrap();
+            p.remove("seen");
+            let sheet = sheets[p["key"].as_str().unwrap()].as_object().unwrap();
+            p.extend(sheet.clone());
+        }
+        assert!(saved.to_string().contains("\"answers\":{\"3\":64}"));
+        std::fs::write(&t.files[0], saved.to_string()).unwrap();
+
+        let again = router(Rooms::load(&t.files[0], 4), t.files[1].clone());
+        let view = ok(&again, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        assert_eq!(view["answers"], 1);
+        assert_eq!(view["people"].as_array().unwrap().len(), 2);
+        assert!(
+            view["wall"].as_str().unwrap().len() > 10,
+            "given a wall key"
+        );
+        let mine = ok(&again, "GET", &format!("/api/p/{ada}"), None).await["view"].clone();
+        let square = mine["squares"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["statement"]["id"] == 3)
+            .unwrap()
+            .clone();
+        assert_eq!(square["answer"], 64);
+        answer(&again, &ada, 4, 10).await;
     }
 }

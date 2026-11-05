@@ -6,6 +6,9 @@
 //! few people who disagree with them most, and on what, so they can go
 //! and find them without waiting for a round.
 
+use std::collections::BTreeMap;
+
+use rooms::lobby::Present;
 use serde::Serialize;
 
 use crate::game::{
@@ -74,15 +77,13 @@ pub struct Leader {
     score: Score,
 }
 
-/// The board, best total first.
-fn leaders(game: &Game) -> Vec<Leader> {
-    let scores = game.scores();
+/// The board from these scores, best total first.
+fn leaders(game: &Game, scores: &BTreeMap<String, Score>) -> Vec<Leader> {
     let mut out: Vec<Leader> = game
-        .players
-        .iter()
+        .players()
         .filter_map(|p| {
-            scores.get(&p.key).map(|&score| Leader {
-                name: p.name.clone(),
+            scores.get(p.key).map(|&score| Leader {
+                name: p.name.to_string(),
                 score,
             })
         })
@@ -107,7 +108,7 @@ pub struct Award {
 /// for a bingo.
 fn awards(game: &Game) -> Vec<Award> {
     let scores = game.scores();
-    let named = |key: &String| game.player(key).map(|p| p.name.clone());
+    let named = |key: &String| game.player(key).map(|p| p.name.to_string());
     let best = |value: &dyn Fn(&Score) -> i32| -> (i32, Vec<String>) {
         let top = scores.values().map(value).max().unwrap_or(0);
         let names = scores
@@ -164,17 +165,11 @@ fn awards(game: &Game) -> Vec<Award> {
         format!("{top} points"),
     );
     if game.mode == Mode::Bingo {
-        let top = game
-            .players
-            .iter()
-            .map(|p| game.lines(p))
-            .max()
-            .unwrap_or(0);
+        let top = game.players().map(|p| game.lines(p)).max().unwrap_or(0);
         let names = game
-            .players
-            .iter()
-            .filter(|p| top > 0 && game.lines(p) == top)
-            .map(|p| p.name.clone())
+            .players()
+            .filter(|p| top > 0 && game.lines(*p) == top)
+            .map(|p| p.name.to_string())
             .collect();
         add(
             "Bingo",
@@ -205,7 +200,7 @@ fn calibrated(game: &Game) -> Vec<Calibrated> {
         .iter()
         .filter_map(|(key, &bits)| {
             Some(Calibrated {
-                name: game.player(key)?.name.clone(),
+                name: game.player(key)?.name.to_string(),
                 bits,
                 bot: false,
             })
@@ -319,7 +314,7 @@ fn picking(game: &Game) -> Option<Picking<'_>> {
         .collect();
     picked.sort_by_key(|p| (std::cmp::Reverse(p.n), p.statement.id));
     Some(Picking {
-        pickers: game.players.iter().filter(|p| !p.picks.is_empty()).count(),
+        pickers: game.players().filter(|p| !p.picks.is_empty()).count(),
         limit: PICKS,
         picked,
     })
@@ -328,6 +323,11 @@ fn picking(game: &Game) -> Option<Picking<'_>> {
 #[derive(Serialize)]
 pub struct HostView<'a> {
     join: &'a str,
+    /// The key of the wall, `/w/<key>`, for the projector.
+    wall: &'a str,
+    /// Everybody, and whether their phone is connected, for the roster
+    /// the host can take people out of.
+    people: Vec<Present<'a>>,
     mode: Mode,
     scale: Scale,
     topics: Vec<TopicChoice>,
@@ -362,8 +362,12 @@ pub struct HostView<'a> {
     picking: Option<Picking<'a>>,
 }
 
+/// Somebody's name, or, for somebody the host took out after their group
+/// had settled, what they are now.
 fn name_of(game: &Game, key: &str) -> String {
-    game.player(key).map(|p| p.name.clone()).unwrap_or_default()
+    game.player(key)
+        .map(|p| p.name.to_string())
+        .unwrap_or_else(|| "(left)".into())
 }
 
 fn group_view<'a>(game: &'a Game, number: usize, group: &Group) -> Option<GroupView<'a>> {
@@ -407,7 +411,7 @@ fn group_view<'a>(game: &'a Game, number: usize, group: &Group) -> Option<GroupV
 
 /// How many of a player's answers moved far enough to count as an update,
 /// and how far they moved in all, on the shared scale of `Statement::gap`.
-fn moved(game: &Game, player: &Player) -> (usize, i32) {
+fn moved(game: &Game, player: Player<'_>) -> (usize, i32) {
     player
         .answers
         .iter()
@@ -426,16 +430,14 @@ fn moved(game: &Game, player: &Player) -> (usize, i32) {
 fn tally<'a>(game: &'a Game, statement: &'a Statement) -> Option<Tally<'a>> {
     let scale = |v: i16| -> f64 { statement.norm(v) * 100.0 };
     let now: Vec<f64> = game
-        .players
-        .iter()
+        .players()
         .filter_map(|p| p.answers.get(&statement.id).map(|&v| scale(v)))
         .collect();
     if now.is_empty() {
         return None;
     }
     let firsts: Vec<f64> = game
-        .players
-        .iter()
+        .players()
         .filter_map(|p| p.first.get(&statement.id).map(|&v| scale(v)))
         .collect();
     let n = now.len() as f64;
@@ -443,8 +445,7 @@ fn tally<'a>(game: &'a Game, statement: &'a Statement) -> Option<Tally<'a>> {
     let spread = (now.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt();
     let first_mean = firsts.iter().sum::<f64>() / firsts.len().max(1) as f64;
     let updated = game
-        .players
-        .iter()
+        .players()
         .filter(
             |p| match (p.first.get(&statement.id), p.answers.get(&statement.id)) {
                 (Some(a), Some(b)) => statement.gap(*a, *b) >= UPDATE,
@@ -470,7 +471,7 @@ fn tally<'a>(game: &'a Game, statement: &'a Statement) -> Option<Tally<'a>> {
     })
 }
 
-pub fn host(game: &Game) -> HostView<'_> {
+pub fn host(game: &Game, now: u64) -> HostView<'_> {
     let round = game
         .rounds
         .last()
@@ -487,18 +488,17 @@ pub fn host(game: &Game) -> HostView<'_> {
         });
     let scores = game.scores();
     let players: Vec<Who> = game
-        .players
-        .iter()
+        .players()
         .map(|p| {
             let (updated, moved) = moved(game, p);
             Who {
-                name: p.name.clone(),
+                name: p.name.to_string(),
                 answered: p.answers.len(),
                 of: game.hand(p).len(),
                 updated,
                 moved,
                 lines: game.lines(p),
-                score: scores.get(&p.key).copied().unwrap_or_default(),
+                score: scores.get(p.key).copied().unwrap_or_default(),
             }
         })
         .collect();
@@ -518,7 +518,9 @@ pub fn host(game: &Game) -> HostView<'_> {
             .collect()
     };
     HostView {
-        join: &game.join,
+        join: &game.lobby.join,
+        wall: &game.lobby.wall,
+        people: game.lobby.roster(now),
         mode: game.mode,
         scale: game.scale,
         topics: TOPICS
@@ -541,10 +543,10 @@ pub fn host(game: &Game) -> HostView<'_> {
         ends: game.ends,
         round,
         rounds: game.rounds.len(),
-        answers: game.players.iter().map(|p| p.answers.len()).sum(),
-        updates: game.players.iter().map(|p| moved(game, p).0).sum(),
+        answers: game.players().map(|p| p.answers.len()).sum(),
+        updates: game.players().map(|p| moved(game, p).0).sum(),
         players,
-        leaders: leaders(game),
+        leaders: leaders(game, &game.scores()),
         kudos_points: KUDOS_POINTS,
         awards: awards(game),
         warmup: warm_host(game),
@@ -710,7 +712,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
             let mut others: Vec<Seen> = Vec::new();
             let mut count = 0;
             if free {
-                for p in game.players.iter().filter(|p| p.key != key) {
+                for p in game.players().filter(|p| p.key != key) {
                     let Some(&theirs) = p.answers.get(&id) else {
                         continue;
                     };
@@ -719,7 +721,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
                     // anchor the answer.
                     if answer.is_some() {
                         others.push(Seen {
-                            name: p.name.clone(),
+                            name: p.name.to_string(),
                             answer: theirs,
                         });
                     }
@@ -767,13 +769,12 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         Vec::new()
     } else {
         let mut found: Vec<Opposite> = game
-            .players
-            .iter()
+            .players()
             .filter(|p| p.key != key)
             .filter_map(|p| {
                 let (id, gap) = game.best_between(me, p)?;
                 Some(Opposite {
-                    name: p.name.clone(),
+                    name: p.name.to_string(),
                     statement: game.statement(id)?,
                     mine: me.answers[&id],
                     theirs: p.answers[&id],
@@ -787,7 +788,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         found
     };
     let (updated, moved) = moved(game, me);
-    let board = leaders(game);
+    let board = leaders(game, &game.scores());
     let rank = board.iter().position(|l| l.name == me.name).map(|i| i + 1);
     let score = game.scores().get(key).copied().unwrap_or_default();
     let finished = game.phase == Phase::Finished;
@@ -803,7 +804,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         .zip(calibration.iter().find(|c| c.bot))
         .map(|(mine, bot)| (mine.bits, bot.bits));
     Some(PlayerView {
-        name: me.name.clone(),
+        name: me.name.to_string(),
         mode: game.mode,
         side: game.side,
         phase: game.phase,
@@ -821,7 +822,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
         lines: game.lines(me),
         updated,
         moved,
-        players: game.players.len(),
+        players: game.lobby.len(),
         score,
         rank,
         winners,
@@ -835,4 +836,230 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
             Vec::new()
         },
     })
+}
+
+// ----------------------------------------------------------------- wall
+//
+// The wall is projected, so everybody in the room sees it, whoever they
+// were paired with. It shows where groups meet and what they talk about,
+// how far along the room is, and, once a group has settled, how its
+// statement came out, as unnamed answers in order of size. Names only for
+// the top of the board and the prizes. Never anybody's answer by name,
+// and nothing before the guesses that depend on it are in.
+
+/// The top of a board: a name and a number, nothing else.
+#[derive(Serialize)]
+pub struct Top {
+    name: String,
+    total: i32,
+}
+
+/// Where a group meets and what it talks about. Not who is in it: their
+/// phones tell them that.
+#[derive(Serialize)]
+pub struct Meeting<'a> {
+    spot: String,
+    statement: &'a Statement,
+}
+
+/// How one statement came out in a round, once every group that talked
+/// about it has settled. The answers are sorted, so that they say nothing
+/// about who gave which.
+#[derive(Serialize)]
+pub struct Settled<'a> {
+    statement: &'a Statement,
+    groups: usize,
+    before: Vec<i16>,
+    after: Vec<i16>,
+    /// How far the groups closed, on average, on the shared scale.
+    closed: i16,
+}
+
+#[derive(Serialize)]
+pub struct WallRound<'a> {
+    number: usize,
+    /// Whether the round is still on: talking, or saying where they stand
+    /// now. Otherwise this is the last round, between rounds.
+    on: bool,
+    meetings: Vec<Meeting<'a>>,
+    /// How many people are in a group, and how many of them have said
+    /// where they stand now and guessed where their partners do.
+    people: usize,
+    done: usize,
+    /// How many could not be paired.
+    waiting: usize,
+    results: Vec<Settled<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct WallWarm<'a> {
+    number: usize,
+    setup: &'a str,
+    claim: &'a str,
+    stage: Stage,
+    before: usize,
+    after: usize,
+    /// Only once the answer is out.
+    outcome: Option<Outcome>,
+    /// The top of the warm-up board, the bot among it, once revealed.
+    board: Vec<Calibrated>,
+}
+
+#[derive(Serialize)]
+pub struct WallView<'a> {
+    phase: Phase,
+    mode: Mode,
+    /// When the round being talked ends, by the server's clock.
+    ends: u64,
+    /// How many are in, and how many of them have answered anything.
+    people: usize,
+    answering: usize,
+    answers: usize,
+    round: Option<WallRound<'a>>,
+    picking: Option<Picking<'a>>,
+    warmup: Option<WallWarm<'a>>,
+    board: Vec<Top>,
+    /// The prizes, once the evening is over.
+    awards: Vec<Award>,
+}
+
+/// How many people a board on the wall names.
+const WALL_TOP: usize = 5;
+
+fn wall_round(game: &Game) -> Option<WallRound<'_>> {
+    let on = matches!(game.phase, Phase::Talking | Phase::Updating);
+    if !on && game.phase != Phase::Answering {
+        return None;
+    }
+    let round = game.rounds.last()?;
+    let mut results: Vec<Settled> = Vec::new();
+    let mut statements: Vec<u32> = round.groups.iter().map(|g| g.statement).collect();
+    statements.sort_unstable();
+    statements.dedup();
+    for id in statements {
+        let groups: Vec<&Group> = round.groups.iter().filter(|g| g.statement == id).collect();
+        if !groups.iter().all(|g| g.settled()) {
+            continue;
+        }
+        let Some(statement) = game.statement(id) else {
+            continue;
+        };
+        let mut before: Vec<i16> = groups
+            .iter()
+            .flat_map(|g| g.before.values())
+            .copied()
+            .collect();
+        let mut after: Vec<i16> = groups
+            .iter()
+            .flat_map(|g| g.members.iter().filter_map(|m| g.landed(m)))
+            .collect();
+        before.sort_unstable();
+        after.sort_unstable();
+        let closed = groups
+            .iter()
+            .map(|g| {
+                let (b, a) = g.gaps(statement);
+                (b - a).max(0) as i32
+            })
+            .sum::<i32>()
+            / groups.len().max(1) as i32;
+        results.push(Settled {
+            statement,
+            groups: groups.len(),
+            before,
+            after,
+            closed: closed as i16,
+        });
+    }
+    let people = round.groups.iter().map(|g| g.members.len()).sum();
+    let done = round
+        .groups
+        .iter()
+        .map(|g| {
+            g.members
+                .iter()
+                .filter(|m| {
+                    g.after.contains_key(*m)
+                        && g.members
+                            .iter()
+                            .filter(|o| o != m)
+                            .all(|o| g.guesses.get(*m).is_some_and(|gs| gs.contains_key(o)))
+                })
+                .count()
+        })
+        .sum();
+    Some(WallRound {
+        number: game.rounds.len(),
+        on,
+        meetings: if on {
+            round
+                .groups
+                .iter()
+                .enumerate()
+                .filter_map(|(i, g)| {
+                    Some(Meeting {
+                        spot: spot(i),
+                        statement: game.statement(g.statement)?,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        people,
+        done,
+        waiting: round.waiting.len(),
+        results,
+    })
+}
+
+fn wall_warm(game: &Game) -> Option<WallWarm<'_>> {
+    let w = game.warmup()?;
+    let revealed = w.stage == Stage::Revealed;
+    let mut outcome = warm_host(game)?.outcome;
+    if let Some(o) = outcome.as_mut() {
+        o.answers.sort_unstable();
+    }
+    Some(WallWarm {
+        number: w.number,
+        setup: &w.puzzle.setup,
+        claim: &w.puzzle.claim,
+        stage: w.stage,
+        before: w.before.len(),
+        after: w.after.len(),
+        outcome,
+        board: if revealed {
+            let mut board = calibrated(game);
+            board.truncate(WALL_TOP + 1);
+            board
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+/// The game's part of the wall, `/w/<key>`: see above for what it may
+/// show.
+pub fn wall(game: &Game) -> WallView<'_> {
+    let finished = game.phase == Phase::Finished;
+    WallView {
+        phase: game.phase,
+        mode: game.mode,
+        ends: game.ends,
+        people: game.lobby.len(),
+        answering: game.players().filter(|p| !p.answers.is_empty()).count(),
+        answers: game.players().map(|p| p.answers.len()).sum(),
+        round: wall_round(game),
+        picking: picking(game),
+        warmup: wall_warm(game),
+        board: leaders(game, &game.revealed_scores())
+            .into_iter()
+            .take(WALL_TOP)
+            .map(|l| Top {
+                name: l.name,
+                total: l.score.total,
+            })
+            .collect(),
+        awards: if finished { awards(game) } else { Vec::new() },
+    }
 }

@@ -1,28 +1,37 @@
 // Speed updating, in a browser.
 //
-// One page with four screens: the one that opens a room, the
-// facilitator's, the one that joins, and the player's, which is almost
-// always a phone.
+// One page with five screens: the one that opens a room, the
+// facilitator's, the one that joins, the player's, which is almost
+// always a phone, and the wall, which is a projector.
 
 import {
+  type Feed,
+  type Present,
   api,
   byId,
+  connectedCount,
   countdown,
   el,
   fail,
   here,
   failed,
   hide,
+  joinLink,
   joining,
+  keepAwake,
   landed,
   onClick,
   onSubmit,
   plural,
+  roster,
   route,
   sentBox,
+  shareLink,
   show,
-  showJoin,
+  showConnection,
   text,
+  wall,
+  wallButton,
   watch,
 } from "./rooms";
 
@@ -166,6 +175,9 @@ interface Picking {
 
 interface HostView {
   join: string;
+  /** The wall's key, for `/w/<key>`. */
+  wall: string;
+  people: Present[];
   mode: Mode;
   scale: Scale;
   topics: TopicChoice[];
@@ -452,10 +464,11 @@ function start(): void {
 
 function host(key: string): void {
   show("host");
-  // The facilitator's screen is usually the one on the wall.
+  // Wide, for a laptop; the projector has a screen of its own, the wall.
   document.body.classList.add("wall-screen");
   const at = (path: string): string => `/api/h/${key}${path}`;
   let current: HostView | null = null;
+  let drawnHost = "";
   /** The setup as the facilitator is editing it, before it is sent. */
   let draft: { mode: Mode; scale: Scale; topics: string[]; side: number } | null = null;
 
@@ -874,16 +887,19 @@ function host(key: string): void {
 
   const draw = (view: HostView): void => {
     current = view;
-    showJoin(view.join);
-    // The code is the main thing on the wall until the first round; after
-    // that it shrinks to a corner for latecomers.
-    byId("room").classList.toggle("tight", view.rounds > 0 || view.phase !== "answering");
-    text(
-      "who",
-      view.players.length
-        ? `${plural(view.players.length, "person is", "people are")} in: ${view.players.map((p) => p.name).join(", ")}.`
-        : "Nobody has joined yet.",
-    );
+    shareLink("join-share", joinLink(view.join));
+    wallButton("wall-button", view.wall);
+    text("who", connectedCount(view.people));
+    // The answer to a removal is only the people; the stream brings the rest.
+    roster("people", view.people, {
+      remove: (name) => api("POST", at("/remove"), { name }),
+    });
+    // The view changes whenever a phone checks in, because the people
+    // carry when each was last seen. The rest is redrawn only when it
+    // changed, so the clock and the open folds are left alone.
+    const shape = JSON.stringify({ ...view, people: null });
+    if (shape === drawnHost) return;
+    drawnHost = shape;
     text("where", view.rounds ? `Round ${view.rounds}` : "");
     drawSetup(view);
     drawWall(view);
@@ -906,6 +922,8 @@ function host(key: string): void {
   onClick("warm-end", () => send("POST", "/warmup/end"));
 
   const feed = watch<HostView>(at(""), draw);
+  showConnection(feed);
+  void keepAwake();
   ticking(
     feed.now,
     () => (current && current.phase === "talking" ? current.ends : null),
@@ -1779,6 +1797,8 @@ function player(key: string): void {
   suggestions("suggest-form", "idea", "idea-chance", "idea-done");
 
   const feed = watch<PlayerView>(at(""), draw);
+  showConnection(feed);
+  void keepAwake();
   ticking(
     feed.now,
     () => (current && current.phase === "talking" ? current.ends : null),
@@ -1789,8 +1809,251 @@ function player(key: string): void {
   );
 }
 
+// ----------------------------------------------------------------- wall
+//
+// The projector's screen, `/w/<key>`. The QR code and who is in come from
+// `rooms`; this is the game's part. Everybody in the room sees it, so the
+// server sends no names but the top of the board, and an answer only once
+// the group it belongs to has settled, sorted among the others.
+
+interface WallMeeting {
+  spot: string;
+  statement: Statement;
+}
+
+interface WallSettled {
+  statement: Statement;
+  groups: number;
+  before: number[];
+  after: number[];
+  closed: number;
+}
+
+interface WallRound {
+  number: number;
+  on: boolean;
+  meetings: WallMeeting[];
+  people: number;
+  done: number;
+  waiting: number;
+  results: WallSettled[];
+}
+
+interface WallWarm {
+  number: number;
+  setup: string;
+  claim: string;
+  stage: Stage;
+  before: number;
+  after: number;
+  outcome: Outcome | null;
+  board: Calibrated[];
+}
+
+interface WallGame {
+  phase: Phase;
+  mode: Mode;
+  ends: number;
+  people: number;
+  answering: number;
+  answers: number;
+  round: WallRound | null;
+  picking: Picking | null;
+  warmup: WallWarm | null;
+  board: { name: string; total: number }[];
+  awards: Award[];
+}
+
+/** Answers as dots along their scale, with its two ends named. */
+function scaleDots(statement: Statement, values: number[], label: string): HTMLElement {
+  const [low, high] = statement.chance ? ["0%", "100%"] : ["1 · disagree", "agree · 7"];
+  return el(
+    "div",
+    { className: "wall-dots" },
+    el("span", { className: "wall-dots-label" }, label),
+    el(
+      "div",
+      { className: "dots" },
+      el("span", { className: "dots-end" }, low),
+      el("span", { className: "dots-end" }, high),
+      ...values.map((v) => {
+        const dot = el("i", {});
+        dot.style.left = `${lean(statement, v) * 100}%`;
+        return dot;
+      }),
+    ),
+  );
+}
+
+/** How one statement came out: everybody's answers before and after, as
+ *  dots, and how far the groups closed. */
+function settledCard(r: WallSettled): HTMLElement {
+  return el(
+    "div",
+    { className: "wall-result" },
+    el("p", { className: "wall-result-statement" }, r.statement.text),
+    scaleDots(r.statement, r.before, "Before"),
+    scaleDots(r.statement, r.after, "After"),
+    el(
+      "p",
+      { className: "note" },
+      `${plural(r.groups, "group", "groups")} · ${r.closed ? `closed ${r.closed} points` : "no closer"}${r.groups > 1 ? " on average" : ""}`,
+    ),
+  );
+}
+
+function wallBoard(board: { name: string; total: number }[]): HTMLElement | string {
+  return board.length
+    ? el(
+        "div",
+        {},
+        el("h2", {}, "Most points"),
+        el("ol", { className: "wall-board" }, ...board.map((l) => el("li", {}, el("b", {}, l.name), el("span", {}, String(l.total))))),
+      )
+    : "";
+}
+
+function wallScreen(key: string): void {
+  let current: WallGame | null = null;
+  let clock = false;
+  let drawn = "";
+  const draw = (game: WallGame | null, slot: HTMLElement, feed: Feed): void => {
+    current = game;
+    if (!clock) {
+      clock = true;
+      ticking(
+        feed.now,
+        () => (current && current.phase === "talking" ? current.ends : null),
+        () => {
+          const c = document.getElementById("w-clock");
+          return c ? [c] : [];
+        },
+      );
+    }
+    // The wall's view changes whenever a phone checks in, because it
+    // carries when each was last seen; the game's part seldom does.
+    const shape = JSON.stringify(game);
+    if (shape === drawn) return;
+    drawn = shape;
+    if (!game) {
+      slot.replaceChildren();
+      return;
+    }
+    // Once the evening is under way the code shrinks for latecomers, and
+    // the game has the screen.
+    document.body.classList.toggle("wall-busy", game.phase !== "answering" || game.round !== null);
+    slot.replaceChildren(...wallParts(game));
+    const c = document.getElementById("w-clock");
+    if (c) c.textContent = countdown(game.ends - feed.now());
+  };
+  wall<WallGame | null>(key, draw);
+}
+
+function wallParts(game: WallGame): (HTMLElement | string)[] {
+  const w = game.warmup;
+  if (game.phase === "warmup" && w) {
+    const o = w.outcome;
+    return [
+      el("p", { className: "eyebrow" }, `Warm-up ${w.number} · a question with a right answer`),
+      el("p", { className: "wall-setup" }, w.setup),
+      el("p", { className: "wall-claim" }, w.claim),
+      o
+        ? el(
+            "div",
+            {},
+            el("p", { className: `wall-verdict ${o.truth ? "good" : "poor"}` }, o.truth ? "True" : "False"),
+            scaleDots({ id: 0, text: "", topic: "", chance: true }, o.answers, "The room"),
+            el(
+              "p",
+              { className: "wall-line" },
+              `The room said ${o.mean_before === null ? "–" : `${Math.round(o.mean_before)}%`} before the clues, ${
+                o.mean_after === null ? "–" : `${Math.round(o.mean_after)}%`
+              } after. The room scored ${bitsText(o.room)} on average; the Bayes bot ${bitsText(o.bot)}.`,
+            ),
+            w.board.length
+              ? el(
+                  "ol",
+                  { className: "wall-board" },
+                  ...w.board.map((c) => el("li", { className: c.bot ? "bot" : "" }, el("b", {}, c.bot ? "🤖 Bayes bot" : c.name), el("span", {}, bitsText(c.bits)))),
+                )
+              : "",
+          )
+        : el(
+            "p",
+            { className: "wall-line" },
+            w.stage === "before"
+              ? `How likely is it, from the setup alone? ${w.before} of ${plural(game.people, "person has", "people have")} answered.`
+              : `Clues are on your phones. Compare with your neighbours, then answer again. ${w.after} of ${game.people} answered.`,
+          ),
+    ];
+  }
+  const r = game.round;
+  if (r && r.on) {
+    const talking = game.phase === "talking";
+    return [
+      el(
+        "div",
+        { className: "wall-head" },
+        el("p", { className: "eyebrow" }, `Round ${r.number}`),
+        talking ? el("p", { className: "clock wall-clock", id: "w-clock" }) : "",
+      ),
+      el(
+        "p",
+        { className: "wall-line" },
+        talking
+          ? "Your phone says where to meet and who to find. Talk about the statement on your spot."
+          : `Phones out: guess where your partner landed, say where you stand now, and whether you learned something. ${r.done} of ${plural(r.people, "person", "people")} done.`,
+      ),
+      r.results.length ? el("div", { className: "wall-results" }, ...r.results.map(settledCard)) : "",
+      el(
+        "div",
+        { className: "pairs wall-meetings" },
+        ...r.meetings.map((m) =>
+          el("div", { className: "pair" }, el("p", { className: "pair-spot" }, m.spot), el("p", { className: "pair-statement" }, m.statement.text)),
+        ),
+      ),
+      r.waiting ? el("p", { className: "note" }, `${plural(r.waiting, "person is", "people are")} not paired this round: answer statements somebody else has answered.`) : "",
+    ];
+  }
+  if (game.phase === "picking" && game.picking) {
+    const p = game.picking;
+    return [
+      el("p", { className: "eyebrow" }, "Before we start"),
+      el("p", { className: "wall-claim" }, `Pick up to ${p.limit} statements you would like to talk about`),
+      el("p", { className: "wall-line" }, `${p.pickers} of ${plural(game.people, "person has", "people have")} picked, ${plural(p.picked.length, "statement", "statements")} so far.`),
+      p.picked.length
+        ? el(
+            "ol",
+            { className: "tallies wall-tallies" },
+            ...p.picked.slice(0, 8).map((t) => el("li", {}, el("span", {}, t.statement.text), el("small", {}, plural(t.n, "pick", "picks")))),
+          )
+        : "",
+    ];
+  }
+  if (game.phase === "finished") {
+    return [
+      el("p", { className: "eyebrow" }, "That was the evening"),
+      el("h1", {}, "The prizes"),
+      game.awards.length ? awardCards(game.awards) : el("p", { className: "note" }, "No prizes: nobody finished a round."),
+      wallBoard(game.board),
+    ];
+  }
+  return [
+    el("p", { className: "eyebrow" }, r ? `After round ${r.number}` : "Speed updating"),
+    el("p", { className: "wall-claim" }, r ? "Answer a few more, the next round is coming" : "Scan the code and say where you stand"),
+    el(
+      "p",
+      { className: "wall-line" },
+      `${game.answering} of ${plural(game.people, "person has", "people have")} answered, ${plural(game.answers, "answer", "answers")} so far.`,
+    ),
+    r && r.results.length ? el("div", { className: "wall-results" }, ...r.results.map(settledCard)) : "",
+    wallBoard(game.board),
+  ];
+}
+
 const where = route();
 if (where.kind === "host") host(where.key);
 else if (where.kind === "join") joining("updating", where.key);
 else if (where.kind === "player") player(where.key);
+else if (where.kind === "wall") wallScreen(where.key);
 else start();

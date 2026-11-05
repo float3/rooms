@@ -1,13 +1,5 @@
 /* The rules specific to speed updating. The rest is rooms.css. */
 
-#room.tight .qr svg {
-  width: 112px;
-}
-
-#room.tight .link {
-  font-size: 0.85rem;
-}
-
 textarea {
   width: 100%;
   font: inherit;
@@ -243,8 +235,9 @@ details.topic small {
 }
 
 /* ------------------------------------------------------------ the wall
- * The facilitator's screen is usually projected, so what the room looks
- * at is large, and the buttons are one slim bar above it. */
+ * What is going on is large on the facilitator's screen too, with the
+ * buttons in one slim bar above it. The wall view, `/w/<key>`, shares
+ * these rules and adds its own at the end. */
 
 body.wall-screen main {
   width: min(1400px, calc(100% - 28px));
@@ -472,23 +465,13 @@ body.wall-screen main {
   padding: 0;
 }
 
-/* Once the rounds start, the code shrinks to a corner for latecomers. */
-#room.tight {
-  padding: 12px;
-}
-
-#room.tight .eyebrow,
-#room.tight .note {
-  font-size: 0.75rem;
-}
-
 @media (min-width: 900px) {
   .stage {
     grid-template-columns: 1fr auto;
   }
 
-  #room:not(.tight) .qr svg {
-    width: 300px;
+  #room {
+    width: 340px;
   }
 }
 
@@ -548,4 +531,87 @@ body.wall-screen main {
 
 .sent-tag.just {
   animation: landed 0.6s ease-out;
+}
+
+/* ------------------------------------------------------- the wall view
+ * `/w/<key>`, on a projector: the QR code and who is in come from
+ * rooms.css; this is the game's part, read from the back of a room. */
+
+.wall-screen #wall-game .wall-line {
+  font-size: clamp(1.1rem, 2.1vw, 1.8rem);
+}
+
+.wall-meetings .pair-spot {
+  font-size: clamp(1.6rem, 2.6vw, 2.4rem);
+}
+
+.wall-meetings .pair-statement {
+  font-size: clamp(1.05rem, 1.6vw, 1.5rem);
+}
+
+.wall-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.wall-result {
+  background: var(--card);
+  border: 1px solid var(--mark);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.wall-result p {
+  margin: 0 0 6px;
+}
+
+.wall-result-statement {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.1rem, 1.7vw, 1.6rem);
+  line-height: 1.25;
+}
+
+.wall-dots {
+  display: grid;
+  grid-template-columns: 4.5em 1fr;
+  align-items: end;
+  gap: 10px;
+}
+
+.wall-dots-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--body);
+  padding-bottom: 6px;
+}
+
+.wall-dots .dots {
+  height: 48px;
+  margin: 4px 0;
+}
+
+.wall-tallies li span {
+  font-size: clamp(1rem, 1.6vw, 1.4rem);
+}
+
+.wall-game .wall-board li {
+  font-size: clamp(1.2rem, 2vw, 1.8rem);
+}
+
+/* Once the evening is under way, the code shrinks for latecomers and the
+ * names give way to the game: their number stays. */
+.wall-busy .wall-qr svg {
+  width: min(24vw, 32vh, 260px);
+}
+
+.wall-busy .wall-people {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .wall-busy .wall {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  }
 }
