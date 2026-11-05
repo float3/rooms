@@ -72,6 +72,11 @@ calls `lobby::migrate` from `Room::migrate` so that rooms saved with
   stream closes, their link stops working, and their name is free again.
   `HasLobby::removable` can refuse it for now; `HasLobby::left` is told
   who left.
+- the host can also take out everybody away at once
+  (`/api/h/<key>/remove-away`): their phone is not connected and
+  `HasLobby::recent` says they have not played in this round or the one
+  before. the game says what counts; by default nobody is away. nobody
+  leaves the count on their own.
 - `HasLobby::arrived` is the game's hook for seating somebody new: deal
   them a card, put them on a team. the seat it returns is kept with them.
 - the wall, `/w/<key>`, is a read-only page for a projector: a large QR
@@ -87,7 +92,9 @@ a state file that will not load is never overwritten: it is copied to
 `<file>.bad-<ms>`, the error is printed, and the rooms that did load are
 kept.
 
-`rooms-client` has the screens to go with it: `wall`, `roster`,
+`rooms-client` has the screens to go with it: `wall`, `roster` (with
+a "Remove N away" button given `away`), `waitingLine` (the host's "18 of
+25 picked · waiting on Ada, Bo and 3 others · 2 not connected"),
 `shareLink`, `wallButton`, `keepAwake`, `showConnection` (a
 "Reconnecting…" notice) and `confirmTap` (press again to confirm).
 they bring their own styles, so a page without the shared stylesheet

@@ -10,7 +10,9 @@
 //! - A name held by somebody whose phone is *not* connected gets that
 //!   person's key back, so a phone that lost its link can rejoin. The
 //!   usual way back is the key the phone stored, which always works.
-//! - The host can take somebody out.
+//! - The host can take somebody out, one at a time, or everybody who is
+//!   away at once: not connected, and not heard from in the game lately
+//!   ([`HasLobby::recent`], [`away`]).
 //!
 //! A tool keeps a [`Lobby`] in its room, as a field of its own, and
 //! implements [`HasLobby`]:
@@ -43,7 +45,7 @@
 //! impl HasLobby for Game {
 //!     fn lobby(&self) -> &Lobby { &self.lobby }
 //!     fn lobby_mut(&mut self) -> &mut Lobby { &mut self.lobby }
-//!     // arrived, left, wall_game, on_wall, removable as the game needs
+//!     // arrived, left, wall_game, on_wall, removable, recent as the game needs
 //! }
 //!
 //! let app = Router::new()
@@ -529,6 +531,19 @@ pub trait HasLobby: Room {
         Ok(())
     }
 
+    /// Whether `player` has done something in the game lately: as a rule,
+    /// in the round being played or the one before it. Somebody whose
+    /// phone is not connected and who has not is [`away`], and the host
+    /// can take everybody away out at once (`POST
+    /// /api/h/<key>/remove-away`).
+    ///
+    /// The default says everybody has, so a tool that does not say what
+    /// counts offers nobody: a phone in a pocket is not connected either,
+    /// and only the game knows who is still playing.
+    fn recent(&self, _player: &Player) -> bool {
+        true
+    }
+
     /// The tool's part of the wall: what the projector shows besides the
     /// QR code and the names. Everybody in the room can see the wall, so
     /// put nothing on it the players should not see yet. `Null`, the
@@ -591,6 +606,60 @@ pub fn remove<R: HasLobby>(room: &mut R, id: u32) -> Result<Player, &'static str
     room.removable(player)?;
     let key = player.key.clone();
     remove_key(room, &key).ok_or("That person is not in the room any more.")
+}
+
+/// Everybody who is away, in the order they joined: their phone is not
+/// connected, and they have not done anything in the game lately
+/// ([`HasLobby::recent`]). This is who the host's "Remove N away" offers
+/// to take out. Nobody leaves the count on their own: only the host does
+/// that, by taking them out.
+pub fn away<R: HasLobby>(room: &R, now: u64) -> Vec<Present<'_>> {
+    room.lobby()
+        .players
+        .iter()
+        .filter(|p| !present(p, now) && !room.recent(p))
+        .map(|p| Present {
+            id: p.id,
+            name: &p.name,
+            connected: Some(false),
+            seat: p.seat,
+        })
+        .collect()
+}
+
+/// The [`Player::id`]s of everybody [`away`], for a host's view.
+pub fn away_ids<R: HasLobby>(room: &R, now: u64) -> Vec<u32> {
+    away(room, now).iter().map(|p| p.id).collect()
+}
+
+/// The host takes out everybody in `ids` who is still [`away`] now, each
+/// as [`remove`] would. The host was shown those names and agreed to
+/// them, so nobody else is taken out, and anybody among them who has come
+/// back since is left in. Answers with who was taken out, or why nobody
+/// was.
+pub fn remove_away<R: HasLobby>(
+    room: &mut R,
+    ids: &[u32],
+    now: u64,
+) -> Result<Vec<Player>, &'static str> {
+    let still: Vec<u32> = away(room, now)
+        .iter()
+        .map(|p| p.id)
+        .filter(|id| ids.contains(id))
+        .collect();
+    let mut out = Vec::new();
+    let mut refused = None;
+    for id in still {
+        match remove(room, id) {
+            Ok(player) => out.push(player),
+            Err(message) => refused = refused.or(Some(message)),
+        }
+    }
+    match (out.is_empty(), refused) {
+        (true, Some(message)) => Err(message),
+        (true, None) => Err("They are back, or out already."),
+        (false, _) => Ok(out),
+    }
 }
 
 /// The room `key` belongs to: through the index, or, for a tool whose
@@ -715,6 +784,13 @@ pub struct Removing {
     pub id: u32,
 }
 
+/// What a host sends to take everybody away out: the ids they were shown,
+/// from [`away_ids`].
+#[derive(Deserialize)]
+pub struct RemovingAway {
+    pub ids: Vec<u32>,
+}
+
 /// `GET /api/j/<join>`: how many are in, which the join page shows.
 pub async fn count<R: HasLobby>(
     State(rooms): State<Arc<Rooms<R>>>,
@@ -768,6 +844,24 @@ pub async fn kick<R: HasLobby>(
     Json(removing): Json<Removing>,
 ) -> Response {
     match rooms.with(&host, |room, _| remove(room, removing.id)).await {
+        None => http::gone(),
+        Some(Err(message)) => http::refused(message),
+        Some(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+/// `POST /api/h/<host>/remove-away` with `{ids}`: takes out those of them
+/// who are still [`away`]. Answers 204, like [`kick`], or refuses when
+/// nobody could be taken out.
+pub async fn kick_away<R: HasLobby>(
+    State(rooms): State<Arc<Rooms<R>>>,
+    Path(host): Path<String>,
+    Json(removing): Json<RemovingAway>,
+) -> Response {
+    match rooms
+        .with(&host, |room, now| remove_away(room, &removing.ids, now))
+        .await
+    {
         None => http::gone(),
         Some(Err(message)) => http::refused(message),
         Some(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
@@ -828,6 +922,7 @@ pub async fn wall_events<R: HasLobby>(
 ///
 /// - `GET /api/j/{key}` and `POST /api/j/{key}`: how many are in, and joining
 /// - `POST /api/h/{key}/remove`: the host takes somebody out
+/// - `POST /api/h/{key}/remove-away`: and everybody [`away`]
 /// - `GET /api/w/{key}` and `/api/w/{key}/events`: the wall
 ///
 /// ```ignore
@@ -842,6 +937,7 @@ pub fn routes<R: HasLobby, S: Clone + Send + Sync + 'static>(rooms: Arc<Rooms<R>
     Router::new()
         .route("/api/j/{key}", get(count::<R>).post(join::<R>))
         .route("/api/h/{key}/remove", post(kick::<R>))
+        .route("/api/h/{key}/remove-away", post(kick_away::<R>))
         .route("/api/w/{key}", get(wall_state::<R>))
         .route("/api/w/{key}/events", get(wall_events::<R>))
         .with_state(rooms)
@@ -879,6 +975,9 @@ mod tests {
         /// Whether the game is under way, which hides who is connected.
         #[serde(default)]
         live: bool,
+        /// Who has done something lately, by name.
+        #[serde(default)]
+        active: Vec<String>,
     }
 
     impl Room for Toy {
@@ -941,6 +1040,9 @@ mod tests {
             }
             Ok(())
         }
+        fn recent(&self, player: &Player) -> bool {
+            self.active.contains(&player.name)
+        }
         fn wall_game(&self, _now: u64) -> Value {
             serde_json::json!({ "round": 1 })
         }
@@ -968,6 +1070,7 @@ mod tests {
             seen: 0,
             ticks: 0,
             live: false,
+            active: Vec::new(),
         }
     }
 
@@ -1141,6 +1244,81 @@ mod tests {
         );
         assert_eq!(room.gone, ["Ada"]);
         assert!(remove_key(&mut room, &ada).is_none());
+    }
+
+    /// Ada is connected; Bo, Cy and Dee are not, and only Bo has played
+    /// lately.
+    fn quiet_room() -> (Toy, [String; 4], u64) {
+        let mut room = toy();
+        let keys = ["Ada", "Bo", "Cy", "Dee"].map(|name| admit(&mut room, name, None, T).unwrap());
+        let now = T + 60_000;
+        room.lobby.touch(&keys[0], now);
+        room.active = vec!["Ada".into(), "Bo".into()];
+        (room, keys, now)
+    }
+
+    fn id(room: &Toy, key: &str) -> u32 {
+        room.lobby.player(key).unwrap().id
+    }
+
+    #[test]
+    fn away_is_not_connected_and_not_heard_from_lately() {
+        let (mut room, keys, now) = quiet_room();
+        let names = |room: &Toy, now| {
+            away(room, now)
+                .iter()
+                .map(|p| p.name.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&room, now), ["Cy", "Dee"]);
+        assert_eq!(
+            away_ids(&room, now),
+            [id(&room, &keys[2]), id(&room, &keys[3])]
+        );
+        // Connected counts as here, whatever the game says.
+        room.active.clear();
+        assert_eq!(names(&room, now), ["Bo", "Cy", "Dee"]);
+        room.lobby.touch(&keys[3], now);
+        assert_eq!(names(&room, now + 1), ["Bo", "Cy"]);
+        assert_eq!(room.lobby.len(), 4, "nobody leaves the count by being away");
+    }
+
+    #[test]
+    fn removing_the_away_takes_out_only_those_shown_who_are_still_away() {
+        let (mut room, keys, now) = quiet_room();
+        let shown = away_ids(&room, now);
+        // Ada was never shown; Dee comes back before the second tap.
+        let mut asked = shown.clone();
+        asked.push(id(&room, &keys[0]));
+        room.lobby.touch(&keys[3], now + 1_000);
+        let out = remove_away(&mut room, &asked, now + 2_000).unwrap();
+        assert_eq!(
+            out.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Cy"]
+        );
+        assert_eq!(room.gone, ["Cy"], "the tool is told, as for one");
+        assert_eq!(room.lobby.len(), 3);
+        assert_eq!(
+            remove_away(&mut room, &shown, now + 2_000).map(|out| out.len()),
+            Err("They are back, or out already.")
+        );
+        // Somebody who went away after the host looked is not taken.
+        let later = now + 2_000 + PRESENT_MS;
+        assert_eq!(away(&room, later).len(), 1, "Dee again");
+        assert!(remove_away(&mut room, &shown[..1], later).is_err());
+        assert!(room.lobby.player(&keys[3]).is_some());
+    }
+
+    #[test]
+    fn the_tool_can_refuse_removing_the_away_too() {
+        let (mut room, _, now) = quiet_room();
+        room.live = true;
+        let shown = away_ids(&room, now);
+        assert_eq!(
+            remove_away(&mut room, &shown, now).map(|out| out.len()),
+            Err("Not while the game is live.")
+        );
+        assert_eq!(room.lobby.len(), 4);
     }
 
     #[test]
@@ -1372,6 +1550,23 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "the wall key cannot remove");
+        let (status, _) = call(
+            &app,
+            "POST",
+            &format!("/api/h/{wall}/remove-away"),
+            Some(serde_json::json!({"ids": [id]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "nor remove the away");
+        // Ada is connected and Toy says nobody has played: not away.
+        let (status, body) = call(
+            &app,
+            "POST",
+            &format!("/api/h/{host}/remove-away"),
+            Some(serde_json::json!({"ids": [id]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
 
         // While the game says not now, the host cannot take anybody out.
         rooms.with(&host, |r, _| r.live = true).await;
