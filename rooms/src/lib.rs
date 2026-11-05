@@ -50,7 +50,7 @@ pub mod tool;
 
 pub use listen::{listen, where_it_listens};
 pub use store::{Room, Rooms};
-pub use stream::{one, one_at, stream};
+pub use stream::{one, one_at, one_unseen, poll, stream};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

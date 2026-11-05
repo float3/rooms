@@ -265,15 +265,19 @@ async fn the_host_takes_somebody_out_of_the_hall_and_the_game() {
         Some(json!({"tool": "numbers"})),
     )
     .await;
+    let before = ok(&app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+    assert_eq!(before["people"][0]["name"], "Ada");
+    let id = before["people"][0]["id"].clone();
     let view = ok(
         &app,
         "POST",
         &format!("/api/h/{host}/remove"),
-        Some(json!({"name": "Ada"})),
+        Some(json!({ "id": id })),
     )
     .await["view"]
         .clone();
     assert_eq!(view["people"].as_array().unwrap().len(), 1);
+    assert_eq!(view["people"][0]["name"], "Bo");
     let (status, _) = call(&app, "GET", &format!("/api/p/{ada}"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "her link stops working");
 
@@ -281,7 +285,7 @@ async fn the_host_takes_somebody_out_of_the_hall_and_the_game() {
         &app,
         "POST",
         &format!("/api/h/{ada}/remove"),
-        Some(json!({"name": "Bo"})),
+        Some(json!({"id": 2})),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "a player cannot remove");
@@ -289,7 +293,7 @@ async fn the_host_takes_somebody_out_of_the_hall_and_the_game() {
         &app,
         "POST",
         &format!("/api/h/{host}/remove"),
-        Some(json!({"name": "Nobody"})),
+        Some(json!({ "id": id })),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -371,12 +375,178 @@ fn a_player_the_game_would_not_take_is_told_why() {
 }
 
 #[test]
-fn a_hall_saved_before_the_lobby_loads() {
-    let old = r#"{"join":"J","people":[{"key":"K","name":"Ada"}],"current":null,"games":{"numbers":{"host":"H","players":{"K":"P"}}},"seen":5}"#;
-    let hall: Hall = serde_json::from_str(old).unwrap();
-    assert_eq!(hall.lobby.join, "J");
-    assert_eq!(hall.lobby.player("K").unwrap().name, "Ada");
-    assert_eq!(hall.seat_in("numbers", "K").as_deref(), Some("P"));
+fn a_hall_saved_before_the_lobby_or_with_it_flattened_loads() {
+    let before = r#"{"join":"J","people":[{"key":"K","name":"Ada"}],"current":null,"games":{"numbers":{"host":"H","players":{"K":"P"}}},"seen":5}"#;
+    let flattened = r#"{"join":"J","wall":"W","players":[{"key":"K","name":"Ada","seen":4}],"current":"numbers","games":{"numbers":{"host":"H","players":{"K":"P"}}},"seen":5}"#;
+    for old in [before, flattened] {
+        let mut saved: Value = serde_json::from_str(old).unwrap();
+        <Hall as rooms::Room>::migrate(&mut saved);
+        let hall: Hall = serde_json::from_value(saved).unwrap();
+        assert_eq!(hall.lobby.join, "J");
+        assert_eq!(hall.lobby.player("K").unwrap().name, "Ada");
+        assert_eq!(hall.lobby.player("K").unwrap().id, 1);
+        assert_eq!(hall.seat_in("numbers", "K").as_deref(), Some("P"));
+    }
+}
+
+#[tokio::test]
+async fn a_hall_saved_by_the_last_version_comes_back_after_a_restart() {
+    let dir = std::env::temp_dir().join(format!("hall-test-restart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("halls.json"),
+        r#"{"HOST":{"join":"J","wall":"W","players":[{"key":"K","name":"Ada"}],"current":null,"games":{},"seen":9999999999999}}"#,
+    )
+    .unwrap();
+    let app = app_in(dir.clone());
+    let view = ok(&app, "GET", "/api/h/HOST", None).await["view"].clone();
+    assert_eq!(view["people"][0]["name"], "Ada");
+    assert_eq!(view["wall"], "W");
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".bad-"))
+        .collect();
+    assert!(left.is_empty(), "nothing was set aside");
+}
+
+/// A game that hides who is connected while it is live, as Petrov Day
+/// does, mounted in a hall of its own.
+mod hiding {
+    use super::*;
+    use rooms::{
+        Room,
+        lobby::{self, HasLobby, Lobby, OnWall, People},
+        tool::Joinable,
+    };
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub struct Secretive {
+        lobby: Lobby,
+        live: bool,
+    }
+
+    impl Room for Secretive {
+        fn expired(&self, _now: u64) -> bool {
+            false
+        }
+        fn keys(&self) -> Vec<&str> {
+            self.lobby.keys().collect()
+        }
+    }
+
+    impl HasLobby for Secretive {
+        fn lobby(&self) -> &Lobby {
+            &self.lobby
+        }
+        fn lobby_mut(&mut self) -> &mut Lobby {
+            &mut self.lobby
+        }
+        fn on_wall(&self, _now: u64) -> OnWall {
+            if self.live {
+                OnWall {
+                    join: false,
+                    people: People::Hidden,
+                    presence: false,
+                    busy: true,
+                }
+            } else {
+                OnWall::default()
+            }
+        }
+    }
+
+    impl Joinable for Secretive {
+        fn open(_now: u64) -> Self {
+            Secretive {
+                lobby: Lobby::new(),
+                live: false,
+            }
+        }
+        fn join(&mut self, name: &str, now: u64) -> Result<String, &'static str> {
+            lobby::admit(self, name, None, now)
+        }
+        fn rejoin(
+            &mut self,
+            known: Option<&str>,
+            name: &str,
+            now: u64,
+        ) -> Result<String, &'static str> {
+            lobby::admit(self, name, known, now)
+        }
+        fn leave(&mut self, key: &str) -> bool {
+            lobby::remove_key(self, key).is_some()
+        }
+    }
+
+    #[tokio::test]
+    async fn while_the_game_hides_who_is_connected_the_hall_hides_it_too() {
+        let dir = std::env::temp_dir().join(format!("hall-test-hiding-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let games: Arc<Rooms<Secretive>> = Rooms::load(dir.join("secretive.json"), 10);
+        let halls = Rooms::load(dir.join("halls.json"), 10);
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Mount::with_lobby(
+            "secretive",
+            "Secretive",
+            games.clone(),
+        ))];
+        let app = router(
+            App {
+                halls,
+                tools: Arc::new(tools),
+            },
+            Router::new(),
+        );
+        let (host, join, _, _) = hall(&app).await;
+        let wall = ok(&app, "GET", &format!("/api/h/{host}"), None).await["view"]["wall"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let view = ok(
+            &app,
+            "POST",
+            &format!("/api/h/{host}/play"),
+            Some(json!({"tool": "secretive"})),
+        )
+        .await["view"]
+            .clone();
+        assert_eq!(view["people"][0]["connected"], true, "not live yet");
+        let shown = ok(&app, "GET", &format!("/api/w/{wall}"), None).await["view"].clone();
+        assert_eq!(shown["people"][0]["name"], "Ada");
+        assert_eq!(shown["busy"], true, "a game is being played");
+
+        let game = key_in(&view["playing"]["url"]);
+        games.with(&game, |room, _| room.live = true).await;
+
+        let view = ok(&app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        assert_eq!(view["people"][0]["name"], "Ada", "the host still has names");
+        assert!(
+            view["people"][0].get("connected").is_none(),
+            "but not who is connected: {view}"
+        );
+        let shown = ok(&app, "GET", &format!("/api/w/{wall}"), None).await["view"].clone();
+        assert!(shown["join"].is_null(), "{shown}");
+        assert!(shown["people"].is_null(), "{shown}");
+        assert!(shown["count"].is_null(), "{shown}");
+        assert!(shown["connected"].is_null(), "{shown}");
+        assert!(!shown.to_string().contains(&join), "{shown}");
+
+        // Back in the lobby, everything shows again.
+        ok(
+            &app,
+            "POST",
+            &format!("/api/h/{host}/play"),
+            Some(json!({"tool": null})),
+        )
+        .await;
+        let shown = ok(&app, "GET", &format!("/api/w/{wall}"), None).await["view"].clone();
+        assert_eq!(shown["join"], join.as_str());
+        assert_eq!(shown["busy"], false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[tokio::test]

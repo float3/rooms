@@ -135,7 +135,7 @@ function host(key: string): void {
     text("mini-count", count);
     // In the lobby and, folded away, above a game, where somebody who
     // has left most often needs taking out.
-    const remove = (name: string) => api("POST", at("/remove"), { name });
+    const remove = (person: Present) => api("POST", at("/remove"), { id: person.id });
     roster("people", view.people, { remove });
     roster("strip-roster", view.people, { remove });
     wallButton("wall-button", view.wall);
@@ -234,7 +234,7 @@ function onTheWall(key: string): void {
     if (slot.dataset.shape === shape) return;
     slot.dataset.shape = shape;
     if (game === null) {
-      slot.replaceChildren(el("p", { className: "wall-playing" }, "Waiting for the host to pick a game."));
+      slot.replaceChildren(el("p", { className: "wall-playing wall-idle" }, "Waiting for the host to pick a game."));
       return;
     }
     const children: Node[] = [el("p", { className: "wall-playing" }, `Playing ${game.title}`)];

@@ -8,7 +8,11 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use crate::{Room, Rooms, now_ms};
+use crate::{
+    Room, Rooms,
+    lobby::{HasLobby, OnWall},
+    now_ms,
+};
 
 /// A future that can be held behind a [`Tool`].
 pub type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -38,14 +42,17 @@ pub trait Joinable: Room {
 
     /// Takes the player with `key` out, because the shared room's host
     /// took them out of the room. Answers whether there was anybody to
-    /// take out. The default keeps everybody.
+    /// take out. The default keeps everybody. With a lobby, this is
+    /// `lobby::remove_key(self, key).is_some()`, which also tells the
+    /// tool ([`crate::lobby::HasLobby::left`]).
     fn leave(&mut self, key: &str) -> bool {
         let _ = key;
         false
     }
 
     /// The key of this room's wall, `/w/<key>`, for the shared room to
-    /// show on its own. The default is no wall.
+    /// show on its own. The default is no wall. With a lobby, this is
+    /// `Some(&self.lobby.wall)`.
     fn wall(&self) -> Option<&str> {
         None
     }
@@ -92,6 +99,15 @@ pub trait Tool: Send + Sync {
         let _ = host;
         Box::pin(async { None })
     }
+
+    /// What the room run with `host` lets the shared room show of its
+    /// people right now ([`HasLobby::on_wall`]): the shared room's wall
+    /// and its host's list of people follow it while the room plays this
+    /// tool. `None` when that room is gone. The default shows everything.
+    fn on_wall<'a>(&'a self, host: &'a str) -> Boxed<'a, Option<OnWall>> {
+        let _ = host;
+        Box::pin(async { Some(OnWall::default()) })
+    }
 }
 
 /// A tool's store, as a [`Tool`].
@@ -99,6 +115,34 @@ pub struct Mount<R: Joinable> {
     pub id: &'static str,
     pub title: &'static str,
     pub rooms: Arc<Rooms<R>>,
+    /// What a room lets the shared room show of its people. Set by
+    /// [`Mount::with_lobby`]; `None` shows everything.
+    pub on_wall: Option<fn(&R, u64) -> OnWall>,
+}
+
+impl<R: Joinable> Mount<R> {
+    /// A tool without a lobby, or one whose wall shows everything.
+    pub fn new(id: &'static str, title: &'static str, rooms: Arc<Rooms<R>>) -> Self {
+        Mount {
+            id,
+            title,
+            rooms,
+            on_wall: None,
+        }
+    }
+}
+
+impl<R: Joinable + HasLobby> Mount<R> {
+    /// A tool with a lobby, whose [`HasLobby::on_wall`] the shared room
+    /// follows while it plays the tool.
+    pub fn with_lobby(id: &'static str, title: &'static str, rooms: Arc<Rooms<R>>) -> Self {
+        Mount {
+            id,
+            title,
+            rooms,
+            on_wall: Some(|room, now| room.on_wall(now)),
+        }
+    }
 }
 
 impl<R: Joinable> Tool for Mount<R> {
@@ -154,6 +198,17 @@ impl<R: Joinable> Tool for Mount<R> {
                 .flatten()
         })
     }
+
+    fn on_wall<'a>(&'a self, host: &'a str) -> Boxed<'a, Option<OnWall>> {
+        Box::pin(async move {
+            let shows = self.on_wall;
+            self.rooms
+                .look(host, |room, now| {
+                    shows.map_or_else(OnWall::default, |f| f(room, now))
+                })
+                .await
+        })
+    }
 }
 
 #[cfg(test)]
@@ -188,11 +243,7 @@ mod tests {
     async fn a_mounted_tool_opens_rooms_and_joins_people_into_them() {
         let path = std::env::temp_dir().join(format!("rooms-tool-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let tool: Box<dyn Tool> = Box::new(Mount {
-            id: "toy",
-            title: "Toy",
-            rooms: Rooms::<Toy>::load(&path, 4),
-        });
+        let tool: Box<dyn Tool> = Box::new(Mount::new("toy", "Toy", Rooms::<Toy>::load(&path, 4)));
         let host = tool.open().await.expect("there is room");
         assert_eq!(tool.join(&host, "Ada").await, Some(Ok("player-Ada".into())));
         assert_eq!(tool.join(&host, "Ada").await, Some(Ok("player-Ada".into())));
@@ -204,13 +255,14 @@ mod tests {
         );
         assert_eq!(tool.leave(&host, "player-Ada").await, Some(false));
         assert_eq!(tool.wall(&host).await, None);
+        assert_eq!(tool.on_wall(&host).await, Some(OnWall::default()));
         let _ = std::fs::remove_file(&path);
     }
 
     #[derive(Serialize, Deserialize)]
     struct WithLobby {
-        #[serde(flatten)]
         lobby: crate::lobby::Lobby,
+        live: bool,
     }
 
     impl Room for WithLobby {
@@ -229,12 +281,19 @@ mod tests {
         fn lobby_mut(&mut self) -> &mut crate::lobby::Lobby {
             &mut self.lobby
         }
+        fn on_wall(&self, _now: u64) -> OnWall {
+            OnWall {
+                presence: !self.live,
+                ..OnWall::default()
+            }
+        }
     }
 
     impl Joinable for WithLobby {
         fn open(_now: u64) -> Self {
             WithLobby {
                 lobby: crate::lobby::Lobby::new(),
+                live: false,
             }
         }
         fn join(&mut self, name: &str, now: u64) -> Result<String, &'static str> {
@@ -249,7 +308,7 @@ mod tests {
             crate::lobby::admit(self, name, known, now)
         }
         fn leave(&mut self, key: &str) -> bool {
-            self.lobby.remove(key).is_some()
+            crate::lobby::remove_key(self, key).is_some()
         }
         fn wall(&self) -> Option<&str> {
             Some(&self.lobby.wall)
@@ -262,11 +321,7 @@ mod tests {
             std::env::temp_dir().join(format!("rooms-tool-lobby-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let rooms = Rooms::<WithLobby>::load(&path, 4);
-        let tool: Box<dyn Tool> = Box::new(Mount {
-            id: "toy",
-            title: "Toy",
-            rooms: rooms.clone(),
-        });
+        let tool: Box<dyn Tool> = Box::new(Mount::with_lobby("toy", "Toy", rooms.clone()));
         let host = tool.open().await.unwrap();
         let ada = tool.join(&host, "Ada").await.unwrap().unwrap();
         assert!(
@@ -280,6 +335,14 @@ mod tests {
         );
         let wall = tool.wall(&host).await.expect("a wall");
         assert_eq!(rooms.locate(&wall), Some(host.clone()));
+        assert_eq!(tool.on_wall(&host).await.map(|s| s.presence), Some(true));
+        rooms.with(&host, |room, _| room.live = true).await;
+        assert_eq!(
+            tool.on_wall(&host).await.map(|s| s.presence),
+            Some(false),
+            "the shared room follows what the game shows"
+        );
+        assert_eq!(tool.on_wall("gone").await, None);
         assert_eq!(tool.leave(&host, &ada).await, Some(true));
         assert_eq!(tool.leave(&host, &ada).await, Some(false));
         assert_eq!(tool.leave("gone", &ada).await, None);

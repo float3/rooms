@@ -53,9 +53,13 @@ of walking every room under the lock.
 ## the lobby
 
 `rooms::lobby` is the joining, presence and kicking every game had its
-own copy of. a game keeps a `Lobby` in its room and implements
-`HasLobby`; `lobby::routes()` then serves joining, the join count, the
-host's "remove" and the wall.
+own copy of. a game keeps a `Lobby` in its room as a field of its own
+(`#[serde(default)] lobby: Lobby`, not flattened: serde's flatten cannot
+read maps with number keys, so a flattened room saves but never loads),
+calls `lobby::migrate` from `Room::migrate` so that rooms saved with
+`join` and `players` at the top level load, and implements `HasLobby`.
+`lobby::routes(rooms)` then serves joining, the join count, the host's
+"remove" and the wall, and merges into a router with any state.
 
 - a name held by somebody whose phone is connected is refused: "That
   name is taken." a name held by somebody whose phone has gone gets that
@@ -64,19 +68,30 @@ host's "remove" and the wall.
 - a player is connected while their event stream is open: the stream
   marks them seen four times a second, and the host sees a dot by each
   name.
-- the host can take somebody out. their stream closes, their link stops
-  working, and their name is free again.
+- the host can take somebody out, by an id that is not their key. their
+  stream closes, their link stops working, and their name is free again.
+  `HasLobby::removable` can refuse it for now; `HasLobby::left` is told
+  who left.
 - `HasLobby::arrived` is the game's hook for seating somebody new: deal
   them a card, put them on a team. the seat it returns is kept with them.
 - the wall, `/w/<key>`, is a read-only page for a projector: a large QR
   code and the join link, who is in and connected, and whatever the game
-  puts there with `HasLobby::wall`. it has a key of its own, which grants
+  puts there with `HasLobby::wall_game`. `HasLobby::on_wall` lets the
+  game hide the code, the names or who is connected, and say when it is
+  busy and should have the screen. it has a key of its own, which grants
   nothing, because a projected address bar can be photographed: the
-  host's key never goes on the wall.
+  host's key never goes on the wall. a wall left on does not keep a room
+  alive.
+
+a state file that will not load is never overwritten: it is copied to
+`<file>.bad-<ms>`, the error is printed, and the rooms that did load are
+kept.
 
 `rooms-client` has the screens to go with it: `wall`, `roster`,
 `shareLink`, `wallButton`, `keepAwake`, `showConnection` (a
 "Reconnecting…" notice) and `confirmTap` (press again to confirm).
+they bring their own styles, so a page without the shared stylesheet
+can use them.
 
 ## one room for every game
 
