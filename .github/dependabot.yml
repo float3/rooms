@@ -1,0 +1,20 @@
+# Dependabot opens the version bumps. Weekly, because none of this moves
+# fast enough to be worth a pull request a day, and grouped, because a
+# patch bump to six crates is one decision and not six.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
