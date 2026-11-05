@@ -675,6 +675,14 @@ const LOBBY_CSS = `
   background-repeat: no-repeat; background-size: 0% 100%;
   animation: rooms-armed var(--armed-ms, 8s) linear;
 }
+/* A page's own .primary sets the whole background, which would wipe the
+   bar and leave red text on a dark fill: an armed primary button is light. */
+.primary.armed, .primary.armed:hover:not(:disabled) {
+  background-color: var(--card, Canvas);
+  background-image: linear-gradient(color-mix(in srgb, var(--bad, #b3261e) 20%, transparent),
+    color-mix(in srgb, var(--bad, #b3261e) 20%, transparent));
+  background-repeat: no-repeat; background-size: 0% 100%;
+}
 @keyframes rooms-armed { from { background-size: 100% 100%; } to { background-size: 0% 100%; } }
 @media (prefers-reduced-motion: reduce) { .armed { animation: none; } }
 .share .link { overflow-wrap: anywhere; }

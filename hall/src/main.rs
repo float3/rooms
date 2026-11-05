@@ -413,11 +413,10 @@ fn games(dir: &std::path::Path) -> (Router, Vec<Arc<dyn Tool>>) {
         );
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(petrov),
-        // `Mount::with_lobby` once a game is on the lobby, so that the
-        // hall follows its `HasLobby::on_wall`.
-        Arc::new(Mount::new("numbers", "Number games", numbers)),
-        Arc::new(Mount::new("estimate", "Estimation", estimate)),
-        Arc::new(Mount::new("updating", "Speed updating", updating)),
+        // On the lobby, so the hall follows each game's `HasLobby::on_wall`.
+        Arc::new(Mount::with_lobby("numbers", "Number games", numbers)),
+        Arc::new(Mount::with_lobby("estimate", "Estimation", estimate)),
+        Arc::new(Mount::with_lobby("updating", "Speed updating", updating)),
     ];
     (routes, tools)
 }
