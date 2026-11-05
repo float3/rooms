@@ -159,8 +159,15 @@ body.playing main {
     align-items: start;
   }
 
+  /* Two by two, so four games do not leave one on a row of its own. */
   .games:not(.compact) {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1100px) {
+  .games:not(.compact) {
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
