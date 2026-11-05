@@ -23,7 +23,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{FromRef, Path, State},
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -52,13 +52,6 @@ const MAX_SUGGESTIONS_BYTES: u64 = 1 << 20;
 struct App {
     rooms: Arc<Rooms<Game>>,
     suggestions: Arc<Mutex<PathBuf>>,
-}
-
-/// So that the lobby's own handlers can be routed here.
-impl FromRef<App> for Arc<Rooms<Game>> {
-    fn from_ref(app: &App) -> Self {
-        app.rooms.clone()
-    }
 }
 
 /// Applies a facilitator's action and answers with their whole view.
@@ -317,13 +310,13 @@ pub fn router(rooms: Arc<Rooms<Game>>, suggestions: PathBuf) -> Router {
 /// the shared room serves it next to the other tools.
 pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -> Router {
     let app = App {
-        rooms,
+        rooms: rooms.clone(),
         suggestions: Arc::new(Mutex::new(suggestions)),
     };
     Router::new()
         .merge(site::routes_under(FILES, base))
         // Joining, the host taking somebody out, and the wall.
-        .merge(lobby::routes::<Game, App>())
+        .merge(lobby::routes(rooms))
         .route("/api/suggest", post(suggest))
         .route("/api/rooms", post(open_room))
         .route("/api/h/{key}", get(host_state))
@@ -372,11 +365,7 @@ impl rooms::tool::Joinable for Game {
     }
 
     fn leave(&mut self, key: &str) -> bool {
-        if self.lobby.remove(key).is_none() {
-            return false;
-        }
-        lobby::HasLobby::left(self, key);
-        true
+        lobby::remove_key(self, key).is_some()
     }
 
     fn wall(&self) -> Option<&str> {
@@ -893,6 +882,19 @@ mod tests {
             .to_string()
     }
 
+    /// The id the host's screen knows somebody by.
+    async fn id_of(app: &Router, host: &str, name: &str) -> u64 {
+        let view = ok(app, "GET", &format!("/api/h/{host}"), None).await;
+        view["view"]["people"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn a_name_in_use_is_refused_and_a_kept_key_gets_back_in() {
         let t = test("names");
@@ -935,15 +937,18 @@ mod tests {
         answer(&t.app, &ada, 0, 90).await;
         answer(&t.app, &bo, 0, 10).await;
 
-        let removed = ok(
+        let (status, body) = call(
             &t.app,
             "POST",
             &format!("/api/h/{host}/remove"),
-            Some(json!({"name": "bo"})),
+            Some(json!({"id": id_of(&t.app, &host, "Bo").await})),
         )
         .await;
-        assert_eq!(removed["view"]["people"][0]["name"], "Ada");
-        assert_eq!(removed["view"]["people"].as_array().unwrap().len(), 1);
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(body.is_null(), "the host's stream brings the view");
+        let view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        assert_eq!(view["people"][0]["name"], "Ada");
+        assert_eq!(view["people"].as_array().unwrap().len(), 1);
 
         let (status, _) = call(&t.app, "GET", &format!("/api/p/{bo}"), None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "Bo's link is dead");
@@ -959,7 +964,7 @@ mod tests {
             &t.app,
             "POST",
             &format!("/api/h/{ada}/remove"),
-            Some(json!({"name": "Ada"})),
+            Some(json!({"id": 1})),
         )
         .await;
         assert_eq!(
@@ -998,7 +1003,7 @@ mod tests {
             &t.app,
             "POST",
             &format!("/api/h/{host}/remove"),
-            Some(json!({"name": "Bo"})),
+            Some(json!({"id": id_of(&t.app, &host, "Bo").await})),
         )
         .await;
         ok(&t.app, "POST", &format!("/api/h/{host}/stop"), None).await;
@@ -1039,13 +1044,16 @@ mod tests {
         let view = ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await;
         assert_eq!(view["view"]["join"], code.as_str(), "the code to join by");
         assert_eq!(view["view"]["people"].as_array().unwrap().len(), 2);
+        assert_eq!(view["view"]["busy"], false, "the code has the screen");
         let game = look(&view);
         assert_eq!(game["people"], 2);
         assert_eq!(game["answering"], 2);
         assert!(game["round"].is_null());
 
         ok(&t.app, "POST", &format!("/api/h/{host}/round"), None).await;
-        let game = look(&ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await);
+        let view = ok(&t.app, "GET", &format!("/api/w/{wall}"), None).await;
+        assert_eq!(view["view"]["busy"], true, "and the round has it now");
+        let game = look(&view);
         let round = &game["round"];
         assert_eq!(round["number"], 1);
         assert_eq!(round["on"], true);
@@ -1098,7 +1106,7 @@ mod tests {
             &t.app,
             "POST",
             &format!("/api/h/{wall}/remove"),
-            Some(json!({"name": "Ada"})),
+            Some(json!({"id": 1})),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -1140,45 +1148,110 @@ mod tests {
         assert!(!game["warmup"]["board"].as_array().unwrap().is_empty());
     }
 
+    /// A room with Ada's answer of 64 to statement 3 saved, the saved
+    /// file, and what it says.
+    async fn saved_with_an_answer(t: &Test) -> (String, String, Value) {
+        let (host, ada, _) = ready(&t.app).await;
+        answer(&t.app, &ada, 3, 64).await;
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&t.files[0]).unwrap()).unwrap();
+        (host, ada, saved)
+    }
+
+    /// Restarts on the saved file and checks that the room came back
+    /// whole: both people, Ada's answer, a wall key, and still playable.
+    /// Then restarts once more, on what that saved.
+    async fn restarts_whole(t: &Test, host: &str, ada: &str) {
+        for restart in 0..2 {
+            let again = router(Rooms::load(&t.files[0], 4), t.files[1].clone());
+            let view = ok(&again, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+            assert_eq!(view["answers"], 1 + restart, "restart {restart}");
+            let people = view["people"].as_array().unwrap();
+            assert_eq!(people.len(), 2);
+            assert_ne!(people[0]["id"], people[1]["id"], "each given an id");
+            assert!(
+                view["wall"].as_str().unwrap().len() > 10,
+                "given a wall key"
+            );
+            let mine = ok(&again, "GET", &format!("/api/p/{ada}"), None).await["view"].clone();
+            let answered = |id: u32| {
+                mine["squares"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["statement"]["id"] == id)
+                    .unwrap()["answer"]
+                    .clone()
+            };
+            assert_eq!(answered(3), 64);
+            if restart == 1 {
+                assert_eq!(answered(4), 10, "what was answered after the first");
+            }
+            answer(&again, ada, 4, 10).await;
+            assert!(
+                !std::fs::read_to_string(&t.files[0])
+                    .unwrap()
+                    .contains("\"sheets\":{}"),
+                "the sheets were kept"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_room_saves_and_loads_again() {
+        let t = test("save");
+        let (host, ada, saved) = saved_with_an_answer(&t).await;
+        assert!(saved[&host]["lobby"]["players"].is_array());
+        assert!(saved[&host]["sheets"][&ada]["answers"]["3"] == 64);
+        restarts_whole(&t, &host, &ada).await;
+    }
+
+    #[tokio::test]
+    async fn a_room_saved_with_the_lobby_flattened_loads() {
+        let t = test("flat-save");
+        let (host, ada, mut saved) = saved_with_an_answer(&t).await;
+        // As #17 saved rooms: the lobby's fields at the top level beside
+        // `sheets`, and its players without ids.
+        let room = saved[&host].as_object_mut().unwrap();
+        let Value::Object(lobby) = room.remove("lobby").unwrap() else {
+            panic!("a lobby");
+        };
+        for (field, value) in lobby {
+            if field != "next" {
+                room.insert(field, value);
+            }
+        }
+        for p in room["players"].as_array_mut().unwrap() {
+            p.as_object_mut().unwrap().remove("id");
+        }
+        std::fs::write(&t.files[0], saved.to_string()).unwrap();
+        restarts_whole(&t, &host, &ada).await;
+    }
+
     #[tokio::test]
     async fn a_room_saved_before_the_lobby_loads_with_its_answers() {
         let t = test("old-save");
-        let (host, ada, _) = ready(&t.app).await;
-        answer(&t.app, &ada, 3, 64).await;
-
+        let (host, ada, mut saved) = saved_with_an_answer(&t).await;
         // Back to how rooms were saved before: each player's card and
-        // answers inside their entry in `players`, and no wall key.
-        let mut saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(&t.files[0]).unwrap()).unwrap();
+        // answers inside their entry in `players` at the top level, and
+        // no wall key or ids.
         let room = saved[&host].as_object_mut().unwrap();
         let sheets = room.remove("sheets").unwrap();
-        room.remove("wall");
-        for p in room["players"].as_array_mut().unwrap() {
+        let Value::Object(lobby) = room.remove("lobby").unwrap() else {
+            panic!("a lobby");
+        };
+        room.insert("join".into(), lobby["join"].clone());
+        let mut players = lobby["players"].clone();
+        for p in players.as_array_mut().unwrap() {
             let p = p.as_object_mut().unwrap();
             p.remove("seen");
+            p.remove("id");
             let sheet = sheets[p["key"].as_str().unwrap()].as_object().unwrap();
             p.extend(sheet.clone());
         }
+        room.insert("players".into(), players);
         assert!(saved.to_string().contains("\"answers\":{\"3\":64}"));
         std::fs::write(&t.files[0], saved.to_string()).unwrap();
-
-        let again = router(Rooms::load(&t.files[0], 4), t.files[1].clone());
-        let view = ok(&again, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
-        assert_eq!(view["answers"], 1);
-        assert_eq!(view["people"].as_array().unwrap().len(), 2);
-        assert!(
-            view["wall"].as_str().unwrap().len() > 10,
-            "given a wall key"
-        );
-        let mine = ok(&again, "GET", &format!("/api/p/{ada}"), None).await["view"].clone();
-        let square = mine["squares"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|s| s["statement"]["id"] == 3)
-            .unwrap()
-            .clone();
-        assert_eq!(square["answer"], 64);
-        answer(&again, &ada, 4, 10).await;
+        restarts_whole(&t, &host, &ada).await;
     }
 }

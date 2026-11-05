@@ -468,7 +468,6 @@ function host(key: string): void {
   document.body.classList.add("wall-screen");
   const at = (path: string): string => `/api/h/${key}${path}`;
   let current: HostView | null = null;
-  let drawnHost = "";
   /** The setup as the facilitator is editing it, before it is sent. */
   let draft: { mode: Mode; scale: Scale; topics: string[]; side: number } | null = null;
 
@@ -890,16 +889,10 @@ function host(key: string): void {
     shareLink("join-share", joinLink(view.join));
     wallButton("wall-button", view.wall);
     text("who", connectedCount(view.people));
-    // The answer to a removal is only the people; the stream brings the rest.
+    // A removal answers with nothing; the stream brings the new view.
     roster("people", view.people, {
-      remove: (name) => api("POST", at("/remove"), { name }),
+      remove: (person) => api("POST", at("/remove"), { id: person.id }),
     });
-    // The view changes whenever a phone checks in, because the people
-    // carry when each was last seen. The rest is redrawn only when it
-    // changed, so the clock and the open folds are left alone.
-    const shape = JSON.stringify({ ...view, people: null });
-    if (shape === drawnHost) return;
-    drawnHost = shape;
     text("where", view.rounds ? `Round ${view.rounds}` : "");
     drawSetup(view);
     drawWall(view);
@@ -1916,7 +1909,6 @@ function wallBoard(board: { name: string; total: number }[]): HTMLElement | stri
 function wallScreen(key: string): void {
   let current: WallGame | null = null;
   let clock = false;
-  let drawn = "";
   const draw = (game: WallGame | null, slot: HTMLElement, feed: Feed): void => {
     current = game;
     if (!clock) {
@@ -1930,18 +1922,10 @@ function wallScreen(key: string): void {
         },
       );
     }
-    // The wall's view changes whenever a phone checks in, because it
-    // carries when each was last seen; the game's part seldom does.
-    const shape = JSON.stringify(game);
-    if (shape === drawn) return;
-    drawn = shape;
     if (!game) {
       slot.replaceChildren();
       return;
     }
-    // Once the evening is under way the code shrinks for latecomers, and
-    // the game has the screen.
-    document.body.classList.toggle("wall-busy", game.phase !== "answering" || game.round !== null);
     slot.replaceChildren(...wallParts(game));
     const c = document.getElementById("w-clock");
     if (c) c.textContent = countdown(game.ends - feed.now());

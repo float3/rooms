@@ -599,19 +599,3 @@ body.wall-screen main {
 .wall-game .wall-board li {
   font-size: clamp(1.2rem, 2vw, 1.8rem);
 }
-
-/* Once the evening is under way, the code shrinks for latecomers and the
- * names give way to the game: their number stays. */
-.wall-busy .wall-qr svg {
-  width: min(24vw, 32vh, 260px);
-}
-
-.wall-busy .wall-people {
-  display: none;
-}
-
-@media (min-width: 900px) {
-  .wall-busy .wall {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
-  }
-}

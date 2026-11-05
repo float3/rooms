@@ -13,12 +13,10 @@
 //! statement now. The difference is what the evening is for.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fmt;
 use std::ops::Deref;
 
-use rooms::lobby::{HasLobby, Lobby};
-use serde::de::{Error, IgnoredAny, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use rooms::lobby::{HasLobby, Lobby, OnWall};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::statements::{TOPICS, topic};
@@ -221,78 +219,28 @@ impl Deref for Player<'_> {
     }
 }
 
-/// Everybody's sheets, by key, saved as `sheets`.
-///
-/// Rooms saved before the lobby kept each sheet inside the player's entry
-/// in `players`, which the lobby now reads, dropping the fields it does
-/// not know. So this reads the same saved entries as the lobby, before
-/// it does, and a room saved without `sheets` takes them from `players`.
-/// That is why it is flattened into the game rather than a plain field.
-#[derive(Default)]
-pub struct Sheets(pub BTreeMap<String, Sheet>);
-
-impl Serialize for Sheets {
-    fn serialize<S: Serializer>(&self, to: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-        let mut map = to.serialize_map(Some(1))?;
-        map.serialize_entry("sheets", &self.0)?;
-        map.end()
+/// Takes each player's sheet out of a room saved before the lobby, when
+/// each sheet was kept inside the player's entry in `players`, into
+/// `sheets`, by key. A room that has `sheets` already is left alone.
+fn migrate_sheets(saved: &mut Value) {
+    let Some(room) = saved.as_object_mut() else {
+        return;
+    };
+    if room.contains_key("sheets") {
+        return;
     }
-}
-
-impl<'de> Deserialize<'de> for Sheets {
-    fn deserialize<D: Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
-        struct Look;
-
-        impl<'de> Visitor<'de> for Look {
-            type Value = Sheets;
-
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a saved room")
-            }
-
-            // Read as JSON values first: inside a flattened struct, serde
-            // cannot read a map keyed by numbers, which answers are.
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Sheets, A::Error> {
-                let mut sheets = None;
-                let mut saved = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "sheets" => sheets = Some(map.next_value::<Value>()?),
-                        "players" => saved = Some(map.next_value::<Value>()?),
-                        _ => {
-                            map.next_value::<IgnoredAny>()?;
-                        }
-                    }
-                }
-                if let Some(sheets) = sheets {
-                    return serde_json::from_value(sheets)
-                        .map(Sheets)
-                        .map_err(Error::custom);
-                }
-                // Saved before the lobby: each player's key with their sheet
-                // beside it, which reads as a sheet that ignores the rest.
-                let saved: Vec<Value> = match saved {
-                    Some(saved) => serde_json::from_value(saved).map_err(Error::custom)?,
-                    None => Vec::new(),
-                };
-                let mut sheets = BTreeMap::new();
-                for player in saved {
-                    let Some(key) = player.get("key").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    let key = key.to_string();
-                    let sheet = serde_json::from_value(player).map_err(Error::custom)?;
-                    sheets.insert(key, sheet);
-                }
-                Ok(Sheets(sheets))
-            }
+    let mut sheets = serde_json::Map::new();
+    for player in room
+        .get("players")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(key) = player.get("key").and_then(Value::as_str) {
+            sheets.insert(key.to_string(), player.clone());
         }
-
-        // As a map, not a struct: a flattened struct takes the entries it
-        // reads, and `players` has to be left for the lobby.
-        from.deserialize_map(Look)
     }
+    room.insert("sheets".into(), Value::Object(sheets));
 }
 
 /// Two people, sometimes three, and what they were given to talk about.
@@ -396,13 +344,11 @@ pub struct Round {
 
 #[derive(Serialize, Deserialize)]
 pub struct Game {
-    /// Before `lobby`, so that it reads the saved players first: see
-    /// [`Sheets`].
-    #[serde(flatten)]
-    sheets: Sheets,
-    /// Who is in, and the join and wall keys. Flattened, so the saved
-    /// names are `join` and `players` as before.
-    #[serde(flatten)]
+    /// What the game keeps for each player, by key.
+    #[serde(default)]
+    sheets: BTreeMap<String, Sheet>,
+    /// Who is in, and the join and wall keys.
+    #[serde(default)]
     pub lobby: Lobby,
     pub mode: Mode,
     pub topics: Vec<String>,
@@ -448,6 +394,14 @@ impl rooms::Room for Game {
     fn keys(&self) -> Vec<&str> {
         self.lobby.keys().collect()
     }
+
+    /// Rooms saved before the lobby kept each sheet in the player's entry
+    /// and the lobby's fields at the top level; rooms saved while it was
+    /// flattened kept `sheets` beside those. Both load as they are now.
+    fn migrate(saved: &mut Value) {
+        migrate_sheets(saved);
+        rooms::lobby::migrate(saved);
+    }
 }
 
 impl HasLobby for Game {
@@ -461,7 +415,7 @@ impl HasLobby for Game {
 
     /// Somebody new: a blank sheet, and in the bingo mode a card.
     fn arrived(&mut self, key: &str, now: u64) -> Result<Option<u32>, &'static str> {
-        self.sheets.0.insert(key.to_string(), Sheet::default());
+        self.sheets.insert(key.to_string(), Sheet::default());
         self.deal(key);
         self.last_seen = now;
         Ok(None)
@@ -472,8 +426,9 @@ impl HasLobby for Game {
     /// is on and has not settled, so that their partners can still finish
     /// it. A settled group, and earlier rounds, keep them, because their
     /// partners' points come from those.
-    fn left(&mut self, key: &str) {
-        self.sheets.0.remove(key);
+    fn left(&mut self, player: &rooms::lobby::Player) {
+        let key = player.key.as_str();
+        self.sheets.remove(key);
         if matches!(self.phase, Phase::Talking | Phase::Updating)
             && let Some(round) = self.rounds.last_mut()
         {
@@ -496,8 +451,17 @@ impl HasLobby for Game {
     }
 
     /// What the projector shows: see [`crate::view::wall`].
-    fn wall(&self, _now: u64) -> Value {
+    fn wall_game(&self, _now: u64) -> Value {
         serde_json::to_value(crate::view::wall(self)).unwrap_or_default()
+    }
+
+    /// Once the evening is under way, past answering before the first
+    /// round, the game has the wall.
+    fn on_wall(&self, _now: u64) -> OnWall {
+        OnWall {
+            busy: !(self.phase == Phase::Answering && self.rounds.is_empty()),
+            ..OnWall::default()
+        }
     }
 }
 
@@ -602,7 +566,7 @@ impl Game {
             .map(|t| t.key.to_string())
             .collect();
         let mut game = Game {
-            sheets: Sheets::default(),
+            sheets: BTreeMap::new(),
             lobby,
             mode: Mode::Bingo,
             deck: Vec::new(),
@@ -627,7 +591,7 @@ impl Game {
         self.lobby.players.iter().map(|p| Player {
             key: &p.key,
             name: &p.name,
-            sheet: self.sheets.0.get(&p.key).unwrap_or(&BLANK),
+            sheet: self.sheets.get(&p.key).unwrap_or(&BLANK),
         })
     }
 
@@ -636,7 +600,7 @@ impl Game {
         Some(Player {
             key: &p.key,
             name: &p.name,
-            sheet: self.sheets.0.get(key).unwrap_or(&BLANK),
+            sheet: self.sheets.get(key).unwrap_or(&BLANK),
         })
     }
 
@@ -644,7 +608,7 @@ impl Game {
         if self.lobby.player(key).is_none() {
             return Err("You are not in this room.");
         }
-        Ok(self.sheets.0.entry(key.to_string()).or_default())
+        Ok(self.sheets.entry(key.to_string()).or_default())
     }
 
     pub fn statement(&self, id: u32) -> Option<&Statement> {
@@ -662,7 +626,7 @@ impl Game {
     /// Whether anybody has answered anything. After that the deck stays as
     /// it is, because the answers refer to it.
     pub fn locked(&self) -> bool {
-        !self.rounds.is_empty() || self.sheets.0.values().any(|p| !p.first.is_empty())
+        !self.rounds.is_empty() || self.sheets.values().any(|p| !p.first.is_empty())
     }
 
     /// The deck the room plays with. A bingo room takes a sample about
@@ -694,7 +658,7 @@ impl Game {
         }
         self.deck = picked;
         let keys: Vec<String> = self.lobby.players.iter().map(|p| p.key.clone()).collect();
-        for p in self.sheets.0.values_mut() {
+        for p in self.sheets.values_mut() {
             p.card.clear();
             p.picks.clear();
         }
@@ -711,7 +675,7 @@ impl Game {
         }
         let size = (self.side as usize).pow(2).min(self.deck.len());
         let mut used = vec![0usize; self.deck.len()];
-        for p in self.sheets.0.values() {
+        for p in self.sheets.values() {
             for &id in &p.card {
                 used[id as usize] += 1;
             }
@@ -730,7 +694,7 @@ impl Game {
             r = mix(r);
             card.swap(i, (r % (i as u64 + 1)) as usize);
         }
-        if let Some(p) = self.sheets.0.get_mut(key) {
+        if let Some(p) = self.sheets.get_mut(key) {
             p.card = card;
         }
     }
@@ -949,7 +913,7 @@ impl Game {
     /// How many people picked each statement, by statement.
     pub fn pick_counts(&self) -> BTreeMap<u32, usize> {
         let mut counts = BTreeMap::new();
-        for id in self.sheets.0.values().flat_map(|p| &p.picks) {
+        for id in self.sheets.values().flat_map(|p| &p.picks) {
             *counts.entry(*id).or_insert(0) += 1;
         }
         counts
@@ -983,7 +947,7 @@ impl Game {
                 Some(s)
             })
             .collect();
-        for p in self.sheets.0.values_mut() {
+        for p in self.sheets.values_mut() {
             p.picks = p
                 .picks
                 .iter()
@@ -1030,7 +994,7 @@ impl Game {
         }
         for g in &groups {
             for m in &g.members {
-                if let Some(p) = self.sheets.0.get_mut(m) {
+                if let Some(p) = self.sheets.get_mut(m) {
                     p.marked.insert(g.statement);
                 }
             }
