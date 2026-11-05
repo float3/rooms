@@ -39,6 +39,15 @@ pub trait Room: Serialize + DeserializeOwned + Send + Sync + 'static {
     fn keys(&self) -> Vec<&str> {
         Vec::new()
     }
+
+    /// Brings one saved room up to date before it is read, for a room
+    /// whose saved shape has changed: a field renamed, or moved into a
+    /// struct of its own. The default leaves it as it is.
+    ///
+    /// A room that keeps a [`crate::lobby::Lobby`] as `lobby: Lobby` calls
+    /// [`crate::lobby::migrate`] here, so that rooms saved with the
+    /// lobby's fields at the top level, or before there was a lobby, load.
+    fn migrate(_saved: &mut serde_json::Value) {}
 }
 
 pub struct Rooms<R: Room> {
@@ -66,15 +75,24 @@ fn index_of<R: Room>(rooms: &HashMap<String, R>) -> HashMap<String, String> {
 }
 
 impl<R: Room> Rooms<R> {
-    /// Rooms from `path`, or no rooms if the file is missing or will not
-    /// parse. Refusing to start over an unreadable file would be worse
-    /// than losing the rooms in it, which are usually over by then.
+    /// Rooms from `path`, or no rooms if the file is missing.
+    ///
+    /// A file that will not parse, or a room in it that will not, is not
+    /// thrown away: the file is copied to `<path>.bad-<ms>` and the error
+    /// printed, and the server starts with every room that did load.
+    /// Refusing to start would be worse than starting without a room or
+    /// two; overwriting the only copy of them would be worse still.
     pub fn load(path: impl Into<PathBuf>, max: usize) -> Arc<Self> {
         let path = path.into();
-        let rooms: HashMap<String, R> = fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
+        let rooms = match fs::read_to_string(&path) {
+            Ok(text) => parse(&path, &text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) => {
+                eprintln!("rooms: could not read {}: {e}", path.display());
+                set_aside(&path);
+                HashMap::new()
+            }
+        };
         let index = std::sync::Mutex::new(index_of(&rooms));
         Arc::new(Rooms {
             rooms: Mutex::new(rooms),
@@ -111,10 +129,47 @@ impl<R: Room> Rooms<R> {
         Some(out)
     }
 
-    /// Runs `f` against a room without saving, for reads.
+    /// Runs `f` against a room as it is, without moving it on to now and
+    /// without saving. A screen's first draw wants [`Rooms::look`].
     pub async fn read<T>(&self, key: &str, f: impl FnOnce(&R, u64) -> T) -> Option<T> {
         let rooms = self.rooms.lock().await;
         Some(f(rooms.get(key)?, now_ms()))
+    }
+
+    /// Moves a room on to now ([`Room::tick`]) and runs `f` against it,
+    /// saving only if the tick changed it. For a screen's first draw: a
+    /// round that ran out while nobody was watching is shown closed.
+    ///
+    /// Unlike [`Rooms::with`], this does not count as somebody opening
+    /// the room ([`Room::seen`]), so a screen that only shows the room, a
+    /// projector left on, does not keep it from expiring.
+    pub async fn look<T>(&self, key: &str, f: impl FnOnce(&R, u64) -> T) -> Option<T> {
+        let mut rooms = self.rooms.lock().await;
+        let now = now_ms();
+        let room = rooms.get_mut(key)?;
+        let changed = room.tick(now);
+        let out = f(room, now);
+        if changed {
+            self.save(&rooms);
+        }
+        Some(out)
+    }
+
+    /// What a stream such as [`crate::one_at`] does with a room each tick,
+    /// for a stream built with [`crate::poll`]: counts as somebody using
+    /// the room ([`Room::seen`]), moves it on to now, runs `f`, and saves
+    /// only if the tick changed it.
+    pub async fn watching<T>(&self, key: &str, f: impl FnOnce(&R, u64) -> T) -> Option<T> {
+        let mut rooms = self.rooms.lock().await;
+        let now = now_ms();
+        let room = rooms.get_mut(key)?;
+        room.seen(now);
+        let changed = room.tick(now);
+        let out = f(room, now);
+        if changed {
+            self.save(&rooms);
+        }
+        Some(out)
     }
 
     /// The first room `f` returns something for. Tools use this to find a
@@ -200,6 +255,50 @@ impl<R: Room> Rooms<R> {
     #[cfg(test)]
     pub(crate) async fn len(&self) -> usize {
         self.rooms.lock().await.len()
+    }
+}
+
+/// The rooms in a saved file. Each room is read on its own, through
+/// [`Room::migrate`], so that one that will not parse costs that room and
+/// not the others; either way the file is kept (see [`set_aside`]).
+fn parse<R: Room>(path: &std::path::Path, text: &str) -> HashMap<String, R> {
+    let saved: HashMap<String, serde_json::Value> = match serde_json::from_str(text) {
+        Ok(saved) => saved,
+        Err(e) => {
+            eprintln!("rooms: {} will not parse: {e}", path.display());
+            set_aside(path);
+            return HashMap::new();
+        }
+    };
+    let mut rooms = HashMap::with_capacity(saved.len());
+    let mut lost = 0;
+    for (key, mut room) in saved {
+        R::migrate(&mut room);
+        match serde_json::from_value(room) {
+            Ok(room) => {
+                rooms.insert(key, room);
+            }
+            Err(e) => {
+                lost += 1;
+                eprintln!("rooms: a room in {} will not load: {e}", path.display());
+            }
+        }
+    }
+    if lost > 0 {
+        set_aside(path);
+    }
+    rooms
+}
+
+/// Copies a file that would not load to `<path>.bad-<ms>`, so that the
+/// next save, which rewrites `path`, does not destroy the only copy.
+fn set_aside(path: &std::path::Path) {
+    let mut name = path.as_os_str().to_owned();
+    name.push(format!(".bad-{}", now_ms()));
+    let aside = PathBuf::from(name);
+    match fs::copy(path, &aside) {
+        Ok(_) => eprintln!("rooms: kept the unreadable file as {}", aside.display()),
+        Err(e) => eprintln!("rooms: could not keep a copy of {}: {e}", path.display()),
     }
 }
 
@@ -393,13 +492,117 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
+    fn aside(path: &std::path::Path) -> Vec<PathBuf> {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| {
+                let found = entry.ok()?.path();
+                let file = found.file_name()?.to_string_lossy().into_owned();
+                file.starts_with(&format!("{name}.bad-")).then_some(found)
+            })
+            .collect()
+    }
+
+    fn clean(path: &std::path::Path) {
+        let _ = fs::remove_file(path);
+        for kept in aside(path) {
+            let _ = fs::remove_file(kept);
+        }
+    }
+
     #[tokio::test]
-    async fn a_corrupt_file_starts_empty_rather_than_refusing_to_start() {
+    async fn a_corrupt_file_starts_empty_and_is_kept_rather_than_overwritten() {
         let path =
             std::env::temp_dir().join(format!("rooms-test-corrupt-{}.json", std::process::id()));
+        clean(&path);
         fs::write(&path, "{ this is not json").unwrap();
         let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 3);
         assert_eq!(rooms.len().await, 0);
+        let kept = aside(&path);
+        assert_eq!(kept.len(), 1, "set aside once");
+        assert_eq!(fs::read_to_string(&kept[0]).unwrap(), "{ this is not json");
+        rooms
+            .create(|_| Toy {
+                label: String::new(),
+                seen: 0,
+                ticks: 0,
+            })
+            .await;
+        assert_eq!(
+            fs::read_to_string(&kept[0]).unwrap(),
+            "{ this is not json",
+            "the next save leaves the copy alone"
+        );
+        clean(&path);
+    }
+
+    #[tokio::test]
+    async fn one_bad_room_costs_that_room_and_the_file_is_kept() {
+        let path =
+            std::env::temp_dir().join(format!("rooms-test-one-bad-{}.json", std::process::id()));
+        clean(&path);
+        let text = r#"{"good":{"label":"a","seen":1,"ticks":0},"bad":{"label":7}}"#;
+        fs::write(&path, text).unwrap();
+        let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 3);
+        assert_eq!(rooms.len().await, 1);
+        assert!(rooms.read("good", |_, _| ()).await.is_some());
+        let kept = aside(&path);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(fs::read_to_string(&kept[0]).unwrap(), text);
+        clean(&path);
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct Renamed {
+        label: String,
+    }
+
+    impl Room for Renamed {
+        fn expired(&self, _now: u64) -> bool {
+            false
+        }
+        fn migrate(saved: &mut serde_json::Value) {
+            if let Some(room) = saved.as_object_mut()
+                && let Some(old) = room.remove("name")
+            {
+                room.insert("label".into(), old);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_room_saved_in_an_older_shape_is_migrated_as_it_loads() {
+        let path =
+            std::env::temp_dir().join(format!("rooms-test-migrate-{}.json", std::process::id()));
+        clean(&path);
+        fs::write(&path, r#"{"k":{"name":"old"}}"#).unwrap();
+        let rooms: Arc<Rooms<Renamed>> = Rooms::load(&path, 3);
+        assert_eq!(
+            rooms.read("k", |r, _| r.label.clone()).await.as_deref(),
+            Some("old")
+        );
+        assert!(aside(&path).is_empty(), "nothing was lost");
+        clean(&path);
+    }
+
+    #[tokio::test]
+    async fn looking_ticks_without_counting_as_a_visit() {
+        let (rooms, path) = store("look");
+        let key = rooms
+            .create(|_| Toy {
+                label: String::new(),
+                seen: 0,
+                ticks: 0,
+            })
+            .await
+            .unwrap();
+        let ticks = rooms.look(&key, |r, _| r.ticks).await;
+        assert_eq!(ticks, Some(1), "moved on before it was read");
+        let seen = rooms.read(&key, |r, _| r.seen).await;
+        assert_eq!(seen, Some(0), "and not counted as somebody opening it");
+        let again: Arc<Rooms<Toy>> = Rooms::load(&path, 3);
+        assert_eq!(again.read(&key, |r, _| r.ticks).await, Some(1), "saved");
         let _ = fs::remove_file(&path);
     }
 }

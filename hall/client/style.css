@@ -175,19 +175,31 @@ body.playing main {
   margin-top: 12px;
 }
 
-/* The hall's wall: the game's own wall in a frame under the names. */
+/* The hall's wall: the game's own wall in a frame. While a game is being
+ * played the wall is busy, so the code sits small to one side and the
+ * frame takes the rest of a 1280x720 projector, less the line naming the
+ * game. */
 .wall-playing {
   font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(1.4rem, 3vw, 2.6rem);
+  margin: 0;
 }
 
 .wall-frame {
   display: block;
   width: 100%;
-  min-height: 55vh;
+  height: max(60vh, calc(100vh - 170px));
   border: 0;
-  margin-top: 16px;
+  margin-top: 12px;
   background: transparent;
+}
+
+.wall-screen main {
+  padding-top: 12px;
+}
+
+.wall-screen .bar {
+  display: none;
 }
 
 /* The roster's rows as the lobby's chips. */

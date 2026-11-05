@@ -12,16 +12,19 @@
 //!   usual way back is the key the phone stored, which always works.
 //! - The host can take somebody out.
 //!
-//! A tool keeps a [`Lobby`] in its room and implements [`HasLobby`]:
+//! A tool keeps a [`Lobby`] in its room, as a field of its own, and
+//! implements [`HasLobby`]:
 //!
 //! ```ignore
 //! #[derive(Serialize, Deserialize)]
 //! struct Game {
-//!     // `flatten` keeps the saved field names, `join` and `players`, so
-//!     // rooms saved before the lobby load as they are.
-//!     #[serde(flatten)]
+//!     // A field of its own, not `#[serde(flatten)]`: a flattened struct
+//!     // sends every field of the room through serde's buffer, which
+//!     // cannot read a map with number keys, and the room would save but
+//!     // never load again. `default` is for rooms saved before the lobby.
+//!     #[serde(default)]
 //!     lobby: Lobby,
-//!     rounds: Vec<Round>,
+//!     rounds: BTreeMap<u32, Round>,
 //!     last_seen: u64,
 //! }
 //!
@@ -29,39 +32,49 @@
 //!     fn keys(&self) -> Vec<&str> {
 //!         self.lobby.keys().collect()
 //!     }
+//!     // Rooms saved with `join` and `players` at the top level, before
+//!     // the lobby or while it was flattened, load into `lobby`.
+//!     fn migrate(saved: &mut serde_json::Value) {
+//!         lobby::migrate(saved);
+//!     }
 //!     // seen, expired, tick as before
 //! }
 //!
 //! impl HasLobby for Game {
 //!     fn lobby(&self) -> &Lobby { &self.lobby }
 //!     fn lobby_mut(&mut self) -> &mut Lobby { &mut self.lobby }
+//!     // arrived, left, wall_game, on_wall, removable as the game needs
 //! }
 //!
 //! let app = Router::new()
 //!     .merge(site::routes_under(FILES, base))
-//!     .merge(lobby::routes::<Game, Shared>())
-//!     .route("/api/p/{key}/events", get(|State(rooms): State<Shared>, Path(key): Path<String>| {
-//!         lobby::player_events(rooms, key, |game, key, now| view::player(game, key, now))
-//!     }));
+//!     .merge(lobby::routes(rooms.clone()))
+//!     .route("/api/p/{key}/events", get(|State(app): State<App>, Path(key): Path<String>| {
+//!         lobby::player_events(app.rooms, key, |game, key, now| view::player(game, key, now))
+//!     }))
+//!     .with_state(app);
 //! ```
 //!
 //! Who is connected is not stored anywhere. Each phone keeps an event
 //! stream open; while it is open, [`player_events`] marks the player seen
 //! four times a second, and a player seen in the last [`PRESENT_MS`] is
-//! connected.
+//! connected. What the host and the wall are sent says only whether they
+//! are, not when they were last seen, so that a view changes when somebody
+//! comes or goes and not four times a second.
 
 use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{FromRef, Path, State},
+    extract::{Path, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{Room, Rooms, http, key, stream};
+use crate::{Room, Rooms, http, key};
 
 /// The most people one room takes.
 pub const MAX_PLAYERS: usize = 200;
@@ -74,6 +87,12 @@ pub const PRESENT_MS: u64 = 3_000;
 /// One person in the room.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Player {
+    /// A number for them that is not a secret, unlike their key: the host
+    /// takes somebody out by it. Given when they join, never reused in
+    /// the room, and given to people in rooms saved without one when the
+    /// room loads.
+    #[serde(default)]
+    pub id: u32,
     /// Their key: the `/p/<key>` link their phone keeps. Only they and
     /// the server know it; no view sends it to anybody else.
     pub key: String,
@@ -89,7 +108,8 @@ pub struct Player {
 
 /// Everybody in a room, and the keys that let people in and let a screen
 /// watch.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "Saved")]
 pub struct Lobby {
     /// The key in the join link and the QR code.
     pub join: String,
@@ -98,11 +118,38 @@ pub struct Lobby {
     /// host's key, because the wall is projected and an address bar on a
     /// projector can be photographed. Rooms saved before there was a wall
     /// are given one when they load.
-    #[serde(default = "key::new")]
     pub wall: String,
-    /// In the order they joined. The hall saved these as `people`.
-    #[serde(default, alias = "people")]
+    /// In the order they joined.
     pub players: Vec<Player>,
+    /// The [`Player::id`] the next person gets.
+    next: u32,
+}
+
+/// A lobby as saved, which may predate wall keys and ids.
+#[derive(Deserialize)]
+struct Saved {
+    #[serde(default = "key::new")]
+    join: String,
+    #[serde(default = "key::new")]
+    wall: String,
+    /// The hall saved these as `people`.
+    #[serde(default, alias = "people")]
+    players: Vec<Player>,
+    #[serde(default)]
+    next: u32,
+}
+
+impl From<Saved> for Lobby {
+    fn from(saved: Saved) -> Lobby {
+        let mut lobby = Lobby {
+            join: saved.join,
+            wall: saved.wall,
+            players: saved.players,
+            next: saved.next.max(1),
+        };
+        lobby.number();
+        lobby
+    }
 }
 
 impl Default for Lobby {
@@ -114,23 +161,75 @@ impl Default for Lobby {
 /// Somebody as the host and the wall see them: no key.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Present<'a> {
+    /// What the host's Remove button sends: see [`Player::id`].
+    pub id: u32,
     pub name: &'a str,
-    /// Whether their phone is connected now.
-    pub connected: bool,
-    /// When it last was, in the server's milliseconds.
-    pub seen: u64,
+    /// Whether their phone is connected now. Left out where who is
+    /// connected is not to be shown: see [`OnWall::presence`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connected: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seat: Option<u32>,
 }
 
-/// What the wall is sent. Names and who is connected, and whatever the
-/// tool decides is public ([`HasLobby::wall`]); never anybody's answer.
-#[derive(Serialize)]
+/// How much of the room the wall shows of the people in it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum People {
+    /// Everybody by name.
+    Names,
+    /// How many there are, and no names.
+    Count,
+    /// Nothing about them.
+    Hidden,
+}
+
+/// What the wall shows besides the game's own part, which the game
+/// decides with [`HasLobby::on_wall`]. The default shows everything.
+///
+/// Petrov Day, for one, hides who is connected while it is live, because
+/// a phone dropping out tells the room which country is still up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnWall {
+    /// The QR code and the join link.
+    pub join: bool,
+    /// The people: by name, as a count, or not at all.
+    pub people: People,
+    /// Whose phone is connected, and how many are.
+    pub presence: bool,
+    /// Something is under way: the game takes the screen, the QR code
+    /// shrinks to a corner for latecomers, and the names give way to a
+    /// count.
+    pub busy: bool,
+}
+
+impl Default for OnWall {
+    fn default() -> Self {
+        OnWall {
+            join: true,
+            people: People::Names,
+            presence: true,
+            busy: false,
+        }
+    }
+}
+
+/// What the wall is sent. What [`OnWall`] allows of the room, and whatever
+/// the tool decides is public ([`HasLobby::wall_game`]); never anybody's
+/// answer.
+#[derive(Debug, Serialize)]
 pub struct Wall<'a> {
     /// The join key, for the QR code. The join link is on the wall
-    /// anyway, so this tells a viewer nothing new.
-    pub join: &'a str,
-    pub people: Vec<Present<'a>>,
+    /// anyway, so this tells a viewer nothing new. `None` hides the code.
+    pub join: Option<&'a str>,
+    /// Everybody by name, or `None` when the names are not shown.
+    pub people: Option<Vec<Present<'a>>>,
+    /// How many are in, or `None` when that is not shown either.
+    pub count: Option<usize>,
+    /// How many of them are connected, or `None` when that is not shown.
+    pub connected: Option<usize>,
+    /// See [`OnWall::busy`].
+    pub busy: bool,
     pub game: Value,
 }
 
@@ -174,11 +273,33 @@ impl Lobby {
             join: key::new(),
             wall: key::new(),
             players: Vec::new(),
+            next: 1,
+        }
+    }
+
+    /// Gives everybody without an id, or with one somebody else has, an
+    /// id of their own: people in rooms saved before ids, or pushed onto
+    /// [`Lobby::players`] by hand.
+    fn number(&mut self) {
+        let mut taken = std::collections::HashSet::new();
+        let highest = self.players.iter().map(|p| p.id).max().unwrap_or(0);
+        self.next = self.next.max(highest.saturating_add(1)).max(1);
+        for player in &mut self.players {
+            if player.id == 0 || !taken.insert(player.id) {
+                player.id = self.next;
+                self.next += 1;
+                taken.insert(player.id);
+            }
         }
     }
 
     pub fn player(&self, key: &str) -> Option<&Player> {
         self.players.iter().find(|p| p.key == key)
+    }
+
+    /// The player with this [`Player::id`].
+    pub fn by_id(&self, id: u32) -> Option<&Player> {
+        self.players.iter().find(|p| p.id == id && id != 0)
     }
 
     /// The player with this name, however it is capitalised or spaced.
@@ -220,17 +341,67 @@ impl Lobby {
         }
     }
 
-    /// Everybody, without keys, in the order they joined.
+    /// Everybody, without keys, in the order they joined, with whether
+    /// each is connected.
     pub fn roster(&self, now: u64) -> Vec<Present<'_>> {
         self.players
             .iter()
             .map(|p| Present {
+                id: p.id,
                 name: &p.name,
-                connected: present(p, now),
-                seen: p.seen,
+                connected: Some(present(p, now)),
                 seat: p.seat,
             })
             .collect()
+    }
+
+    /// Everybody, without keys and without saying who is connected.
+    pub fn names(&self) -> Vec<Present<'_>> {
+        self.players
+            .iter()
+            .map(|p| Present {
+                id: p.id,
+                name: &p.name,
+                connected: None,
+                seat: p.seat,
+            })
+            .collect()
+    }
+
+    /// [`Lobby::roster`] when `presence`, [`Lobby::names`] when not.
+    pub fn people(&self, now: u64, presence: bool) -> Vec<Present<'_>> {
+        if presence {
+            self.roster(now)
+        } else {
+            self.names()
+        }
+    }
+
+    /// Somebody new, under a fresh key and the next id, without the join
+    /// rules or [`HasLobby::arrived`]: for moving people seated by an older
+    /// version of a tool into its lobby. `None` for an empty name, a name
+    /// already here, or a full room. They count as not connected.
+    pub fn add(&mut self, name: &str, seat: Option<u32>) -> Option<&Player> {
+        let name = tidy(name, MAX_NAME);
+        if name.is_empty() || self.named(&name).is_some() || self.players.len() >= MAX_PLAYERS {
+            return None;
+        }
+        self.push(name, seat, 0);
+        self.players.last()
+    }
+
+    fn push(&mut self, name: String, seat: Option<u32>, seen: u64) -> String {
+        let key = key::new();
+        self.number();
+        self.players.push(Player {
+            id: self.next,
+            key: key.clone(),
+            name,
+            seat,
+            seen,
+        });
+        self.next += 1;
+        key
     }
 
     /// The join rules, without seating anybody. Most tools want [`admit`],
@@ -265,31 +436,31 @@ impl Lobby {
         if self.players.len() >= MAX_PLAYERS {
             return Err("This room is full.");
         }
-        let key = key::new();
-        self.players.push(Player {
-            key: key.clone(),
-            name,
-            seat: None,
-            // Counted as connected from the moment they join, so a second
-            // phone typing the same name in the next breath is refused
-            // before the first one's stream has opened.
-            seen: now,
-        });
-        Ok(Admitted::New(key))
+        // Counted as connected from the moment they join, so a second
+        // phone typing the same name in the next breath is refused before
+        // the first one's stream has opened.
+        Ok(Admitted::New(self.push(name, None, now)))
     }
 
-    /// Takes somebody out. Their phone's stream closes and their link
-    /// stops working; the join link lets them back in as somebody new.
+    /// Takes somebody out of the lobby alone. Their phone's stream closes
+    /// and their link stops working; the join link lets them back in as
+    /// somebody new. A tool wants [`remove_key`], which also tells it.
     pub fn remove(&mut self, key: &str) -> Option<Player> {
         let at = self.players.iter().position(|p| p.key == key)?;
         Some(self.players.remove(at))
     }
 
-    /// The wall's view, with `game` as the tool's part of it.
-    pub fn wall_view<'a>(&'a self, now: u64, game: Value) -> Wall<'a> {
+    /// The wall's view: what `shows` allows of the room, with `game` as
+    /// the tool's part of it.
+    pub fn wall_view<'a>(&'a self, now: u64, shows: OnWall, game: Value) -> Wall<'a> {
+        let counted = shows.people != People::Hidden;
         Wall {
-            join: &self.join,
-            people: self.roster(now),
+            join: shows.join.then_some(self.join.as_str()),
+            people: (shows.people == People::Names).then(|| self.people(now, shows.presence)),
+            count: counted.then_some(self.players.len()),
+            connected: (counted && shows.presence)
+                .then(|| self.players.iter().filter(|p| present(p, now)).count()),
+            busy: shows.busy,
             game,
         }
     }
@@ -297,6 +468,34 @@ impl Lobby {
 
 fn present(player: &Player, now: u64) -> bool {
     now.saturating_sub(player.seen) < PRESENT_MS
+}
+
+/// Moves a lobby saved with its fields at the top level of the room, as
+/// `join`, `wall` and `players` (or the hall's `people`), into a `lobby`
+/// field. That is how rooms were saved before the lobby, and while the
+/// lobby was `#[serde(flatten)]`ed into them. Call it from
+/// [`Room::migrate`]. A room that already has a `lobby`, or never had a
+/// `join`, is left alone: `#[serde(default)]` on the field gives the
+/// second a fresh lobby.
+///
+/// A tool whose old `players` held more than a lobby's player does, such
+/// as each player's answers, takes what it needs from them first: after
+/// this they are in `lobby.players`, where only the lobby's fields of
+/// them are read.
+pub fn migrate(saved: &mut Value) {
+    let Some(room) = saved.as_object_mut() else {
+        return;
+    };
+    if room.contains_key("lobby") || !room.contains_key("join") {
+        return;
+    }
+    let mut lobby = serde_json::Map::new();
+    for field in ["join", "wall", "players", "people", "next"] {
+        if let Some(value) = room.remove(field) {
+            lobby.insert(field.to_string(), value);
+        }
+    }
+    room.insert("lobby".into(), Value::Object(lobby));
 }
 
 /// A room with a [`Lobby`] in it.
@@ -316,21 +515,39 @@ pub trait HasLobby: Room {
         Ok(None)
     }
 
-    /// Somebody has been taken out by the host. Forget what the tool
-    /// keeps for them, or keep it for the scores: the tool decides.
-    fn left(&mut self, _key: &str) {}
+    /// `player` has been taken out, and is no longer in the lobby. Forget
+    /// what the tool keeps for them, or keep it for the scores: the tool
+    /// decides. Called by [`remove_key`] and [`remove`].
+    fn left(&mut self, _player: &Player) {}
+
+    /// Whether the host may take `player` out now, from the host's screen
+    /// ([`remove`], `POST /api/h/<key>/remove`). An error is shown to the
+    /// host. The default always may. The shared room takes people out
+    /// through [`remove_key`], which does not ask: somebody it has taken
+    /// out of the room is out of every game.
+    fn removable(&self, _player: &Player) -> Result<(), &'static str> {
+        Ok(())
+    }
 
     /// The tool's part of the wall: what the projector shows besides the
     /// QR code and the names. Everybody in the room can see the wall, so
     /// put nothing on it the players should not see yet. `Null`, the
     /// default, shows nothing.
-    fn wall(&self, _now: u64) -> Value {
+    fn wall_game(&self, _now: u64) -> Value {
         Value::Null
+    }
+
+    /// What else the wall shows: the QR code, the names, who is connected,
+    /// and whether the game should have the screen. The default shows
+    /// everything and is never busy. The shared room's wall and its host's
+    /// list of people follow the game it is playing in this too.
+    fn on_wall(&self, _now: u64) -> OnWall {
+        OnWall::default()
     }
 }
 
 /// Lets somebody in by the lobby's rules and seats them. Answers with
-/// their key. This is what `Joinable::join` should call.
+/// their key. This is what `Joinable::join` and `Joinable::rejoin` call.
 pub fn admit<R: HasLobby>(
     room: &mut R,
     name: &str,
@@ -354,17 +571,26 @@ pub fn admit<R: HasLobby>(
     }
 }
 
-/// Takes somebody out by name, which is all the host's screen knows them
-/// by, and tells the tool. Answers with the key they had.
-pub fn remove<R: HasLobby>(room: &mut R, name: &str) -> Result<String, &'static str> {
-    let key = room
+/// Takes the player with `key` out and tells the tool
+/// ([`HasLobby::left`]). Answers with who they were, or `None` if nobody
+/// has that key. This is what `Joinable::leave` calls.
+pub fn remove_key<R: HasLobby>(room: &mut R, key: &str) -> Option<Player> {
+    let player = room.lobby_mut().remove(key)?;
+    room.left(&player);
+    Some(player)
+}
+
+/// The host takes somebody out by their [`Player::id`], which is what the
+/// host's screen knows them by, if the tool allows it now
+/// ([`HasLobby::removable`]). Answers with who they were.
+pub fn remove<R: HasLobby>(room: &mut R, id: u32) -> Result<Player, &'static str> {
+    let player = room
         .lobby()
-        .named(name)
-        .map(|p| p.key.clone())
-        .ok_or("Nobody by that name is in the room.")?;
-    room.lobby_mut().remove(&key);
-    room.left(&key);
-    Ok(key)
+        .by_id(id)
+        .ok_or("That person is not in the room any more.")?;
+    room.removable(player)?;
+    let key = player.key.clone();
+    remove_key(room, &key).ok_or("That person is not in the room any more.")
 }
 
 /// The room `key` belongs to: through the index, or, for a tool whose
@@ -390,9 +616,11 @@ fn envelope_raw(now: u64, view: &str) -> String {
     format!("{{\"now\":{now},\"view\":{view}}}")
 }
 
-/// A player's view, once: for the page's first draw. `render` is given
-/// the room, the player's key and the time, and answers with the view as
-/// JSON, or `None` for a key the room does not know.
+/// A player's view, once: for the page's first draw, and for a join page
+/// asking whether a kept key still works. `render` is given the room, the
+/// player's key and the time, and answers with the view as JSON, or
+/// `None` for a key the room does not know. The room is moved on to now
+/// first, so the view is not stale, and the player counts as connected.
 pub async fn player_state<R: HasLobby>(
     rooms: &Rooms<R>,
     key: &str,
@@ -402,8 +630,10 @@ pub async fn player_state<R: HasLobby>(
         return http::gone();
     };
     match rooms
-        .read(&at, |room, now| {
-            room.lobby().player(key)?;
+        .with(&at, |room, now| {
+            if !room.lobby_mut().touch(key, now) {
+                return None;
+            }
             render(room, key, now).map(|view| envelope_raw(now, &view))
         })
         .await
@@ -426,7 +656,7 @@ pub async fn player_events<R: HasLobby>(
         return http::gone();
     };
     let saver = rooms.clone();
-    stream(rooms, move |held, now| {
+    crate::stream(rooms, move |held, now| {
         let room = held.get_mut(&at)?;
         if !room.lobby_mut().touch(&key, now) {
             return None;
@@ -442,7 +672,8 @@ pub async fn player_events<R: HasLobby>(
 }
 
 /// A player acts: finds their room, applies `action`, and answers with
-/// what `reply` renders, usually the player's view in an envelope.
+/// what `reply` renders, usually the player's view in an envelope. A
+/// player who acts is connected, whatever their stream is doing.
 pub async fn act_as<R: HasLobby>(
     rooms: &Rooms<R>,
     key: &str,
@@ -454,7 +685,9 @@ pub async fn act_as<R: HasLobby>(
     };
     let done = rooms
         .with(&at, |room, now| {
-            room.lobby().player(key)?;
+            if !room.lobby_mut().touch(key, now) {
+                return None;
+            }
             Some(action(room, key, now).map(|()| reply(room, key, now)))
         })
         .await
@@ -475,10 +708,11 @@ pub struct Joining {
     pub key: Option<String>,
 }
 
-/// What a host sends to take somebody out.
+/// What a host sends to take somebody out: their [`Player::id`], from
+/// [`Present::id`].
 #[derive(Deserialize)]
-pub struct Named {
-    pub name: String,
+pub struct Removing {
+    pub id: u32,
 }
 
 /// `GET /api/j/<join>`: how many are in, which the join page shows.
@@ -524,36 +758,33 @@ pub async fn join<R: HasLobby>(
     }
 }
 
-/// `POST /api/h/<host>/remove` with `{name}`: takes them out and answers
-/// with everybody left, as `{now, view: {people}}`. The host's own stream
-/// brings the rest of its view.
+/// `POST /api/h/<host>/remove` with `{id}`: takes them out, if the tool
+/// allows it now. Answers 204 and nothing else: the host's own stream
+/// brings its view, which is the tool's to render and may not show who is
+/// connected.
 pub async fn kick<R: HasLobby>(
     State(rooms): State<Arc<Rooms<R>>>,
     Path(host): Path<String>,
-    Json(named): Json<Named>,
+    Json(removing): Json<Removing>,
 ) -> Response {
-    let done = rooms
-        .with(&host, |room, now| {
-            remove(room, &named.name).map(|_| {
-                http::envelope(
-                    now,
-                    &serde_json::json!({ "people": room.lobby().roster(now) }),
-                )
-            })
-        })
-        .await;
-    match done {
+    match rooms.with(&host, |room, _| remove(room, removing.id)).await {
         None => http::gone(),
         Some(Err(message)) => http::refused(message),
-        Some(Ok(body)) => http::json(body),
+        Some(Ok(_)) => StatusCode::NO_CONTENT.into_response(),
     }
 }
 
-fn wall_json<R: HasLobby>(room: &R, now: u64) -> Option<String> {
-    serde_json::to_string(&room.lobby().wall_view(now, room.wall(now))).ok()
+/// The wall's view of a room as JSON: [`HasLobby::on_wall`] decides what
+/// of the room is shown, [`HasLobby::wall_game`] the game's part.
+pub fn wall_json<R: HasLobby>(room: &R, now: u64) -> Option<String> {
+    let view = room
+        .lobby()
+        .wall_view(now, room.on_wall(now), room.wall_game(now));
+    serde_json::to_string(&view).ok()
 }
 
-/// `GET /api/w/<wall>`: the wall's view, once.
+/// `GET /api/w/<wall>`: the wall's view, once, moved on to now. Looking
+/// does not keep the room alive.
 pub async fn wall_state<R: HasLobby>(
     State(rooms): State<Arc<Rooms<R>>>,
     Path(wall): Path<String>,
@@ -562,7 +793,7 @@ pub async fn wall_state<R: HasLobby>(
         return http::gone();
     };
     match rooms
-        .read(&at, |room, now| {
+        .look(&at, |room, now| {
             (room.lobby().wall == wall)
                 .then(|| wall_json(room, now).map(|view| envelope_raw(now, &view)))
                 .flatten()
@@ -575,7 +806,8 @@ pub async fn wall_state<R: HasLobby>(
     }
 }
 
-/// `GET /api/w/<wall>/events`: the wall's stream.
+/// `GET /api/w/<wall>/events`: the wall's stream. A wall left on does not
+/// keep the room alive; when the room expires, the stream closes.
 pub async fn wall_events<R: HasLobby>(
     State(rooms): State<Arc<Rooms<R>>>,
     Path(wall): Path<String>,
@@ -583,7 +815,7 @@ pub async fn wall_events<R: HasLobby>(
     let Some(at) = room_of(&rooms, &wall).await else {
         return http::gone();
     };
-    crate::one_at(rooms, at, move |room, now| {
+    crate::one_unseen(rooms, at, move |room, now| {
         if room.lobby().wall != wall {
             return None;
         }
@@ -591,25 +823,28 @@ pub async fn wall_events<R: HasLobby>(
     })
 }
 
-/// The lobby's routes, for a tool whose state is, or holds, its
-/// `Arc<Rooms<R>>` (implement `FromRef` for a state of your own):
+/// The lobby's routes, with `rooms` as their state, so that they merge
+/// into a router with any state of the tool's own:
 ///
 /// - `GET /api/j/{key}` and `POST /api/j/{key}`: how many are in, and joining
 /// - `POST /api/h/{key}/remove`: the host takes somebody out
 /// - `GET /api/w/{key}` and `/api/w/{key}/events`: the wall
 ///
+/// ```ignore
+/// let app = Router::new()
+///     .route("/api/h/{key}", get(host_state))
+///     .merge(lobby::routes(app_state.games.clone()))
+///     .with_state(app_state);
+/// ```
+///
 /// The page at `/w/{key}` is in [`crate::site::routes`].
-pub fn routes<R, S>() -> Router<S>
-where
-    R: HasLobby,
-    S: Clone + Send + Sync + 'static,
-    Arc<Rooms<R>>: FromRef<S>,
-{
+pub fn routes<R: HasLobby, S: Clone + Send + Sync + 'static>(rooms: Arc<Rooms<R>>) -> Router<S> {
     Router::new()
         .route("/api/j/{key}", get(count::<R>).post(join::<R>))
         .route("/api/h/{key}/remove", post(kick::<R>))
         .route("/api/w/{key}", get(wall_state::<R>))
         .route("/api/w/{key}/events", get(wall_events::<R>))
+        .with_state(rooms)
 }
 
 #[cfg(test)]
@@ -617,27 +852,51 @@ mod tests {
     use super::*;
     use axum::{
         body::Body,
-        http::{Request, StatusCode, header},
+        http::{Request, header},
     };
+    use std::collections::BTreeMap;
     use tower::ServiceExt;
 
     #[derive(Serialize, Deserialize)]
     struct Toy {
-        #[serde(flatten)]
+        #[serde(default)]
         lobby: Lobby,
         /// Which team each player is on, as a tool would keep it.
         #[serde(default)]
         dealt: Vec<String>,
+        /// Who left, by name, as `left` was told.
+        #[serde(default)]
+        gone: Vec<String>,
         #[serde(default)]
         secret: u32,
+        /// Number keys, which a flattened lobby made unloadable.
+        #[serde(default)]
+        rounds: BTreeMap<u32, String>,
+        #[serde(default)]
+        seen: u64,
+        #[serde(default)]
+        ticks: u64,
+        /// Whether the game is under way, which hides who is connected.
+        #[serde(default)]
+        live: bool,
     }
 
     impl Room for Toy {
+        fn seen(&mut self, now: u64) {
+            self.seen = now;
+        }
+        fn tick(&mut self, _now: u64) -> bool {
+            self.ticks += 1;
+            false
+        }
         fn expired(&self, _now: u64) -> bool {
             false
         }
         fn keys(&self) -> Vec<&str> {
             self.lobby.keys().collect()
+        }
+        fn migrate(saved: &mut Value) {
+            migrate(saved);
         }
     }
 
@@ -668,11 +927,34 @@ mod tests {
                 .count();
             Ok(Some(u32::from(second < first)))
         }
-        fn left(&mut self, key: &str) {
-            self.dealt.retain(|k| k != key);
+        fn left(&mut self, player: &Player) {
+            assert!(
+                self.lobby.player(&player.key).is_none(),
+                "told once they are out"
+            );
+            self.dealt.retain(|k| *k != player.key);
+            self.gone.push(player.name.clone());
         }
-        fn wall(&self, _now: u64) -> Value {
+        fn removable(&self, _player: &Player) -> Result<(), &'static str> {
+            if self.live {
+                return Err("Not while the game is live.");
+            }
+            Ok(())
+        }
+        fn wall_game(&self, _now: u64) -> Value {
             serde_json::json!({ "round": 1 })
+        }
+        fn on_wall(&self, _now: u64) -> OnWall {
+            if self.live {
+                OnWall {
+                    join: false,
+                    people: People::Count,
+                    presence: false,
+                    busy: true,
+                }
+            } else {
+                OnWall::default()
+            }
         }
     }
 
@@ -680,11 +962,23 @@ mod tests {
         Toy {
             lobby: Lobby::new(),
             dealt: Vec::new(),
+            gone: Vec::new(),
             secret: 7,
+            rounds: BTreeMap::new(),
+            seen: 0,
+            ticks: 0,
+            live: false,
         }
     }
 
     const T: u64 = 1_000_000;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("rooms-lobby-{name}-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
 
     #[test]
     fn a_name_held_by_a_connected_phone_is_refused() {
@@ -769,7 +1063,7 @@ mod tests {
                 .iter()
                 .map(|p| (p.name, p.connected))
                 .collect::<Vec<_>>(),
-            [("Ada", false), ("Bo", true)]
+            [("Ada", Some(false)), ("Bo", Some(true))]
         );
         assert!(!room.lobby.connected(&ada, now));
         let json = serde_json::to_string(&roster).unwrap();
@@ -780,31 +1074,195 @@ mod tests {
     }
 
     #[test]
-    fn the_host_takes_somebody_out() {
+    fn what_is_sent_about_people_changes_when_they_come_and_go_and_not_every_tick() {
+        let mut room = toy();
+        let ada = admit(&mut room, "Ada", None, T).unwrap();
+        let wall = |room: &Toy, now| wall_json(room, now).unwrap();
+        let host = |room: &Toy, now| serde_json::to_string(&room.lobby.roster(now)).unwrap();
+        let (first_wall, first_host) = (wall(&room, T), host(&room, T));
+        // Her stream marks her seen four times a second.
+        for tick in 1..=8 {
+            let now = T + tick * 250;
+            room.lobby.touch(&ada, now);
+            assert_eq!(wall(&room, now), first_wall, "the wall at tick {tick}");
+            assert_eq!(host(&room, now), first_host, "the host at tick {tick}");
+        }
+        // Her phone goes: that is a change, once.
+        let gone = T + 2_000 + PRESENT_MS;
+        assert_ne!(wall(&room, gone), first_wall);
+        assert_eq!(wall(&room, gone), wall(&room, gone + 10_000));
+    }
+
+    #[test]
+    fn people_have_ids_that_are_not_their_keys_and_are_not_reused() {
+        let mut room = toy();
+        let ada = admit(&mut room, "Ada", None, T).unwrap();
+        let bo = admit(&mut room, "Bo", None, T).unwrap();
+        let ids: Vec<u32> = room.lobby.players.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [1, 2]);
+        remove_key(&mut room, &bo).unwrap();
+        let cy = admit(&mut room, "Cy", None, T).unwrap();
+        assert_eq!(room.lobby.player(&cy).unwrap().id, 3, "Bo's id stays his");
+        assert_eq!(room.lobby.by_id(1).unwrap().key, ada);
+        assert!(room.lobby.by_id(2).is_none());
+        assert!(room.lobby.by_id(0).is_none());
+    }
+
+    #[test]
+    fn the_host_takes_somebody_out_by_id_and_the_tool_is_told_who() {
         let mut room = toy();
         let ada = admit(&mut room, "Ada", None, T).unwrap();
         admit(&mut room, "Bo", None, T).unwrap();
-        assert_eq!(remove(&mut room, "ada"), Ok(ada.clone()));
+        let id = room.lobby.player(&ada).unwrap().id;
+        assert_eq!(remove(&mut room, id).map(|p| p.key), Ok(ada.clone()));
         assert!(room.lobby.player(&ada).is_none());
         assert!(!room.dealt.contains(&ada), "and the tool forgot them");
+        assert_eq!(room.gone, ["Ada"], "told who, after they were out");
         assert!(!room.lobby.touch(&ada, T), "so their stream closes");
-        assert!(remove(&mut room, "Ada").is_err());
+        assert!(remove(&mut room, id).is_err());
         let back = admit(&mut room, "Ada", Some(&ada), T).unwrap();
         assert_ne!(back, ada, "the old key no longer gets in");
     }
 
     #[test]
-    fn rooms_saved_before_the_lobby_load_into_it() {
-        // A numbers or estimate room as it was saved, and the hall's.
-        let old = r#"{"join":"J","players":[{"key":"K","name":"Ada"}],"secret":3}"#;
-        let room: Toy = serde_json::from_str(old).unwrap();
+    fn the_tool_can_refuse_the_host_but_not_the_shared_room() {
+        let mut room = toy();
+        let ada = admit(&mut room, "Ada", None, T).unwrap();
+        room.live = true;
+        let id = room.lobby.player(&ada).unwrap().id;
+        assert_eq!(
+            remove(&mut room, id).map(|p| p.key),
+            Err("Not while the game is live.")
+        );
+        assert!(room.lobby.player(&ada).is_some());
+        assert_eq!(
+            remove_key(&mut room, &ada).map(|p| p.name),
+            Some("Ada".into())
+        );
+        assert_eq!(room.gone, ["Ada"]);
+        assert!(remove_key(&mut room, &ada).is_none());
+    }
+
+    #[test]
+    fn rooms_saved_before_the_lobby_or_with_it_flattened_load_into_it() {
+        let migrated = |text: &str| {
+            let mut saved: Value = serde_json::from_str(text).unwrap();
+            <Toy as Room>::migrate(&mut saved);
+            serde_json::from_value::<Toy>(saved).unwrap()
+        };
+        // A numbers or estimate room as it was saved.
+        let room = migrated(r#"{"join":"J","players":[{"key":"K","name":"Ada"}],"secret":3}"#);
         assert_eq!(room.lobby.join, "J");
         assert_eq!(room.lobby.player("K").unwrap().name, "Ada");
+        assert_eq!(room.lobby.player("K").unwrap().id, 1, "given an id");
         assert_eq!(room.lobby.wall.len(), key::LEN, "a wall key is made");
         assert_eq!(room.secret, 3);
-        let hall = r#"{"join":"J","people":[{"key":"K","name":"Ada"}]}"#;
-        let room: Toy = serde_json::from_str(hall).unwrap();
+        // The hall's.
+        let room = migrated(r#"{"join":"J","people":[{"key":"K","name":"Ada"}]}"#);
         assert_eq!(room.lobby.len(), 1);
+        // With the lobby flattened in, as rooms#18 saved them.
+        let room = migrated(
+            r#"{"join":"J","wall":"W","players":[{"key":"K","name":"Ada","seen":5}],"secret":4}"#,
+        );
+        assert_eq!((room.lobby.wall.as_str(), room.secret), ("W", 4));
+        // Before there was any join key: a fresh lobby.
+        let room = migrated(r#"{"secret":5}"#);
+        assert!(room.lobby.is_empty() && room.lobby.join.len() == key::LEN);
+        // And as it is saved now, untouched.
+        let now = serde_json::to_string(&room).unwrap();
+        let again = migrated(&now);
+        assert_eq!(again.lobby.join, room.lobby.join);
+    }
+
+    #[test]
+    fn an_old_room_with_two_people_one_name_apart_in_case_can_lose_either() {
+        // Saved before names were compared ignoring case, so both got in.
+        let mut saved: Value = serde_json::from_str(
+            r#"{"join":"J","players":[{"key":"K1","name":"alex"},{"key":"K2","name":"Alex"}]}"#,
+        )
+        .unwrap();
+        migrate(&mut saved);
+        let mut room: Toy = serde_json::from_value(saved).unwrap();
+        let ids: Vec<u32> = room.lobby.roster(0).iter().map(|p| p.id).collect();
+        assert_eq!(ids, [1, 2]);
+        assert_eq!(remove(&mut room, 2).unwrap().key, "K2", "the second Alex");
+        assert_eq!(room.lobby.players[0].key, "K1");
+    }
+
+    #[tokio::test]
+    async fn a_room_with_number_keys_survives_a_save_and_a_load() {
+        let path = temp("numbered");
+        let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 4);
+        let host = rooms
+            .create(|_| {
+                let mut room = toy();
+                room.rounds.insert(1, "first".into());
+                room.rounds.insert(20, "twentieth".into());
+                room
+            })
+            .await
+            .unwrap();
+        let ada = rooms
+            .with(&host, |room, now| admit(room, "Ada", None, now))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let again: Arc<Rooms<Toy>> = Rooms::load(&path, 4);
+        let (rounds, name, id) = again
+            .read(&host, |room, _| {
+                let ada = room.lobby.player(&ada).unwrap();
+                (room.rounds.clone(), ada.name.clone(), ada.id)
+            })
+            .await
+            .expect("the room came back");
+        assert_eq!(rounds.get(&20).map(String::as_str), Some("twentieth"));
+        assert_eq!((name.as_str(), id), ("Ada", 1));
+        assert_eq!(again.locate(&ada), Some(host.clone()), "indexed again");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_wall_shows_what_the_game_allows() {
+        let mut room = toy();
+        let ada = admit(&mut room, "Ada", None, T).unwrap();
+        admit(&mut room, "Bo", None, T - PRESENT_MS).unwrap();
+        let open: Value = serde_json::from_str(&wall_json(&room, T).unwrap()).unwrap();
+        assert_eq!(open["join"], room.lobby.join.as_str());
+        assert_eq!(open["people"][0]["name"], "Ada");
+        assert_eq!(open["people"][0]["connected"], true);
+        assert_eq!(open["count"], 2);
+        assert_eq!(open["connected"], 1);
+        assert_eq!(open["busy"], false);
+        assert_eq!(open["game"]["round"], 1);
+
+        room.live = true;
+        let text = wall_json(&room, T).unwrap();
+        let live: Value = serde_json::from_str(&text).unwrap();
+        assert!(live["join"].is_null(), "no QR code: {text}");
+        assert!(live["people"].is_null(), "no names: {text}");
+        assert_eq!(live["count"], 2);
+        assert!(live["connected"].is_null(), "nobody's connection: {text}");
+        assert_eq!(live["busy"], true);
+        assert!(!text.contains("Ada") && !text.contains(&ada), "{text}");
+
+        // Names without who is connected.
+        let names = room.lobby.wall_view(
+            T,
+            OnWall {
+                presence: false,
+                ..OnWall::default()
+            },
+            Value::Null,
+        );
+        let text = serde_json::to_string(&names).unwrap();
+        assert!(text.contains("Ada"), "{text}");
+        assert!(
+            !text.contains("connected\":true")
+                && !text.contains("connected\":false")
+                && text.contains("connected\":null"),
+            "{text}"
+        );
     }
 
     async fn call(
@@ -832,17 +1290,36 @@ mod tests {
         )
     }
 
+    /// The lobby's routes in a tool whose state is its own, which holds
+    /// the rooms rather than being them.
+    #[derive(Clone)]
+    struct App {
+        rooms: Arc<Rooms<Toy>>,
+        name: &'static str,
+    }
+
     #[tokio::test]
     async fn the_routes_join_count_remove_and_show_the_wall() {
-        let path = std::env::temp_dir().join(format!("rooms-lobby-{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        let path = temp("routes");
         let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 4);
         let host = rooms.create(|_| toy()).await.unwrap();
         let (join, wall) = rooms
             .read(&host, |r, _| (r.lobby.join.clone(), r.lobby.wall.clone()))
             .await
             .unwrap();
-        let app: Router = routes::<Toy, Arc<Rooms<Toy>>>().with_state(rooms.clone());
+        let state = App {
+            rooms: rooms.clone(),
+            name: "toy",
+        };
+        let app: Router = Router::new()
+            .route(
+                "/api/name",
+                get(|State(app): State<App>| async move { app.name }),
+            )
+            .merge(routes(state.rooms.clone()))
+            .with_state(state);
+        let (status, _) = call(&app, "GET", "/api/name", None).await;
+        assert_eq!(status, StatusCode::OK, "the tool's own routes still work");
 
         let (status, body) = call(
             &app,
@@ -876,6 +1353,7 @@ mod tests {
         assert_eq!(body["view"]["join"], join.as_str());
         assert_eq!(body["view"]["people"][0]["name"], "Ada");
         assert_eq!(body["view"]["game"]["round"], 1);
+        let id = body["view"]["people"][0]["id"].as_u64().unwrap();
         let text = body.to_string();
         assert!(!text.contains(&ada) && !text.contains(&host), "{text}");
         assert!(!text.contains("secret"), "{text}");
@@ -890,29 +1368,177 @@ mod tests {
             &app,
             "POST",
             &format!("/api/h/{wall}/remove"),
-            Some(serde_json::json!({"name": "Ada"})),
+            Some(serde_json::json!({"id": id})),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "the wall key cannot remove");
 
+        // While the game says not now, the host cannot take anybody out.
+        rooms.with(&host, |r, _| r.live = true).await;
         let (status, body) = call(
             &app,
             "POST",
             &format!("/api/h/{host}/remove"),
-            Some(serde_json::json!({"name": "Ada"})),
+            Some(serde_json::json!({"id": id})),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["view"]["people"], serde_json::json!([]));
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"], "Not while the game is live.");
+        assert!(body.get("view").is_none(), "and is told nothing else");
+        rooms.with(&host, |r, _| r.live = false).await;
+
+        let request = Request::post(format!("/api/h/{host}/remove"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({"id": id}).to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 10)
+            .await
+            .unwrap();
+        assert!(bytes.is_empty(), "no partial view for the page to take");
         assert_eq!(rooms.locate(&ada), None);
+        let (status, _) = call(
+            &app,
+            "POST",
+            &format!("/api/h/{host}/remove"),
+            Some(serde_json::json!({"id": id})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "nobody left to take out");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn first_draws_are_moved_on_to_now_and_a_wall_keeps_nothing_alive() {
+        let path = temp("first-draw");
+        let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 4);
+        let host = rooms.create(|_| toy()).await.unwrap();
+        let ada = rooms
+            .with(&host, |r, now| admit(r, "Ada", None, now - PRESENT_MS))
+            .await
+            .unwrap()
+            .unwrap();
+        let wall = rooms
+            .read(&host, |r, _| r.lobby.wall.clone())
+            .await
+            .unwrap();
+        let (ticks, seen) = rooms.read(&host, |r, _| (r.ticks, r.seen)).await.unwrap();
+        let app: Router = routes(rooms.clone());
+
+        let (status, _) = call(&app, "GET", &format!("/api/w/{wall}"), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let after = rooms.read(&host, |r, _| (r.ticks, r.seen)).await.unwrap();
+        assert_eq!(
+            after,
+            (ticks + 1, seen),
+            "ticked, and not counted as a visit"
+        );
+
+        let response = wall_events(State(rooms.clone()), Path(wall.clone())).await;
+        let mut body = response.into_body();
+        http_frame(&mut body).await;
+        http_frame(&mut body).await;
+        assert_eq!(
+            rooms.read(&host, |r, _| r.seen).await.unwrap(),
+            seen,
+            "a wall left on does not keep the room alive"
+        );
+        drop(body);
+
+        let response = player_state(&rooms, &ada, |r, key, _| {
+            Some(format!("{}", r.lobby.player(key)?.id))
+        })
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (ticked, connected) = rooms
+            .read(&host, |r, now| (r.ticks, r.lobby.connected(&ada, now)))
+            .await
+            .unwrap();
+        assert!(ticked > ticks + 1, "the player's first draw ticked too");
+        assert!(connected, "and they count as here");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn a_player_who_acts_counts_as_connected() {
+        let path = temp("act");
+        let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 4);
+        let host = rooms.create(|_| toy()).await.unwrap();
+        let ada = rooms
+            .with(&host, |r, now| admit(r, "Ada", None, now - 2 * PRESENT_MS))
+            .await
+            .unwrap()
+            .unwrap();
+        let away = |rooms: Arc<Rooms<Toy>>, ada: String| async move {
+            !rooms
+                .read(&host_of(&rooms, &ada).await, |r, now| {
+                    r.lobby.connected(&ada, now)
+                })
+                .await
+                .unwrap()
+        };
+        assert!(away(rooms.clone(), ada.clone()).await);
+        let response = act_as(
+            &rooms,
+            &ada,
+            |r, _, _| {
+                r.secret += 1;
+                Ok(())
+            },
+            |r, _, _| r.secret.to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!away(rooms.clone(), ada.clone()).await);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    async fn host_of(rooms: &Rooms<Toy>, key: &str) -> String {
+        room_of(rooms, key).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_wall_stream_sends_nothing_new_while_nothing_changes() {
+        let path = temp("dedupe");
+        let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 4);
+        let host = rooms.create(|_| toy()).await.unwrap();
+        let ada = rooms
+            .with(&host, |r, now| admit(r, "Ada", None, now))
+            .await
+            .unwrap()
+            .unwrap();
+        let wall = rooms
+            .read(&host, |r, _| r.lobby.wall.clone())
+            .await
+            .unwrap();
+        // Ada's phone is connected throughout, which bumps her `seen`.
+        let phone = player_events(rooms.clone(), ada.clone(), |r, key, _| {
+            Some(format!("\"{}\"", r.lobby.player(key)?.name))
+        })
+        .await;
+        let mut phone = phone.into_body();
+        http_frame(&mut phone).await;
+
+        let response = wall_events(State(rooms.clone()), Path(wall)).await;
+        let mut body = response.into_body();
+        let first = http_frame(&mut body).await;
+        assert!(first.contains("\"connected\":1"), "{first}");
+        let next = tokio::time::timeout(std::time::Duration::from_millis(1_500), async {
+            http_frame(&mut body).await
+        })
+        .await;
+        assert!(
+            next.is_err(),
+            "nothing is sent while nothing changes: {next:?}"
+        );
+        drop(phone);
         let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn a_player_stream_marks_them_connected_and_closes_when_they_are_removed() {
-        let path =
-            std::env::temp_dir().join(format!("rooms-lobby-stream-{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        let path = temp("stream");
         let rooms: Arc<Rooms<Toy>> = Rooms::load(&path, 4);
         let host = rooms.create(|_| toy()).await.unwrap();
         let ada = rooms
@@ -942,8 +1568,9 @@ mod tests {
                 .unwrap()
         );
 
+        let key = ada.clone();
         rooms
-            .with(&host, |r, _| remove(r, "Ada"))
+            .with(&host, move |r, _| remove_key(r, &key))
             .await
             .unwrap()
             .unwrap();
@@ -966,7 +1593,15 @@ mod tests {
 
     async fn http_frame(body: &mut Body) -> String {
         use http_body_util::BodyExt;
-        let frame = body.frame().await.unwrap().unwrap();
-        String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap()
+        loop {
+            let frame = body.frame().await.unwrap().unwrap();
+            if let Ok(data) = frame.into_data() {
+                let text = String::from_utf8(data.to_vec()).unwrap();
+                // Keep-alive comments are not views.
+                if text.starts_with("data:") {
+                    return text;
+                }
+            }
+        }
     }
 }

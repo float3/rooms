@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use rooms::lobby::{HasLobby, Lobby, Present};
+use rooms::lobby::{self, HasLobby, Lobby, OnWall, Player, Present};
 use rooms::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,8 +38,10 @@ pub struct Seated {
 #[derive(Serialize, Deserialize)]
 pub struct Hall {
     /// The join key, the wall key and the people. Saved as `join` and
-    /// `people` before the lobby, which still loads.
-    #[serde(flatten)]
+    /// `people` at the top level before the lobby, and as `join`, `wall`
+    /// and `players` while it was flattened in; both still load, through
+    /// `Room::migrate`.
+    #[serde(default)]
     pub lobby: Lobby,
     /// The game being played, by its id.
     pub current: Option<String>,
@@ -61,6 +63,10 @@ impl rooms::Room for Hall {
     fn keys(&self) -> Vec<&str> {
         self.lobby.keys().collect()
     }
+
+    fn migrate(saved: &mut Value) {
+        lobby::migrate(saved);
+    }
 }
 
 impl HasLobby for Hall {
@@ -74,10 +80,10 @@ impl HasLobby for Hall {
 
     /// Forgets their place in every game. Taking them out of the games
     /// themselves is the handler's job, because that waits on the games.
-    fn left(&mut self, key: &str) {
+    fn left(&mut self, player: &Player) {
         for session in self.games.values_mut() {
-            session.players.remove(key);
-            session.refused.remove(key);
+            session.players.remove(&player.key);
+            session.refused.remove(&player.key);
         }
     }
 }
@@ -217,11 +223,15 @@ impl Hall {
             .collect()
     }
 
-    pub fn host_view(&self, now: u64, tools: &[Arc<dyn Tool>]) -> HostView<'_> {
+    /// The host's view. `game` is what the game being played lets the
+    /// room see of its people ([`OnWall`]): while it hides who is
+    /// connected, so does the host's list here, because the hall's host
+    /// screen is often the one on the wall.
+    pub fn host_view(&self, now: u64, tools: &[Arc<dyn Tool>], game: OnWall) -> HostView<'_> {
         HostView {
             join: &self.lobby.join,
             wall: &self.lobby.wall,
-            people: self.lobby.roster(now),
+            people: self.lobby.people(now, game.presence),
             games: tools
                 .iter()
                 .map(|tool| Game {
@@ -257,11 +267,22 @@ impl Hall {
         })
     }
 
+    /// What the hall's wall shows of the room, given what the game being
+    /// played allows (`game`, from the game's `HasLobby::on_wall`): the
+    /// game's rules, and busy whenever a game is being played, so that the
+    /// game's frame has the screen.
+    pub fn on_wall(&self, game: OnWall) -> OnWall {
+        OnWall {
+            busy: game.busy || self.current.is_some(),
+            ..game
+        }
+    }
+
     /// The hall's part of its wall: the game being played, and that
     /// game's own wall to show in a frame, if it has one. What a game puts
     /// on its wall is the game's to decide; see
-    /// `rooms::lobby::HasLobby::wall`.
-    pub fn wall_game(&self, tools: &[Arc<dyn Tool>]) -> Value {
+    /// `rooms::lobby::HasLobby::wall_game`.
+    pub fn wall_part(&self, tools: &[Arc<dyn Tool>]) -> Value {
         match self.current.as_ref() {
             None => Value::Null,
             Some(id) => serde_json::json!({

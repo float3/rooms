@@ -23,7 +23,9 @@ use axum::{
     routing::{get, post},
 };
 use rooms::{
-    Rooms, http, lobby, now_ms, site,
+    Rooms, http,
+    lobby::{self, OnWall},
+    now_ms, site,
     tool::{Mount, Tool},
 };
 use serde::Deserialize;
@@ -50,6 +52,24 @@ impl App {
     fn tool(&self, id: &str) -> Option<Arc<dyn Tool>> {
         self.tools.iter().find(|tool| tool.id() == id).cloned()
     }
+
+    /// What the game the hall `key` is playing lets the room see of its
+    /// people right now. Everything, in the lobby or when the game's room
+    /// has gone.
+    async fn game_on_wall(&self, key: &str) -> OnWall {
+        let playing = self
+            .halls
+            .read(key, |hall, _| hall.current_game())
+            .await
+            .flatten();
+        let Some((id, host)) = playing else {
+            return OnWall::default();
+        };
+        match self.tool(&id) {
+            Some(tool) => tool.on_wall(&host).await.unwrap_or_default(),
+            None => OnWall::default(),
+        }
+    }
 }
 
 /// So that the lobby's own handlers can be routed here.
@@ -70,11 +90,12 @@ async fn open_hall(State(app): State<App>) -> Response {
 }
 
 async fn host_state(State(app): State<App>, Path(key): Path<String>) -> Response {
+    let game = app.game_on_wall(&key).await;
     let tools = app.tools.clone();
     match app
         .halls
-        .read(&key, |hall, now| {
-            http::envelope(now, &hall.host_view(now, &tools))
+        .look(&key, |hall, now| {
+            http::envelope(now, &hall.host_view(now, &tools, game))
         })
         .await
     {
@@ -83,10 +104,23 @@ async fn host_state(State(app): State<App>, Path(key): Path<String>) -> Response
     }
 }
 
+/// The host's stream. Each tick asks the game being played what it lets
+/// the room see, which takes that game's lock, so this is a
+/// [`rooms::poll`] rather than a [`rooms::one_at`].
 async fn host_events(State(app): State<App>, Path(key): Path<String>) -> Response {
-    let tools = app.tools.clone();
-    rooms::one_at(app.halls, key, move |hall, now| {
-        serde_json::to_string(&hall.host_view(now, &tools)).ok()
+    rooms::poll(move |_| {
+        let app = app.clone();
+        let key = key.clone();
+        async move {
+            let game = app.game_on_wall(&key).await;
+            let tools = app.tools.clone();
+            app.halls
+                .watching(&key, |hall, now| {
+                    serde_json::to_string(&hall.host_view(now, &tools, game)).ok()
+                })
+                .await
+                .flatten()
+        }
     })
 }
 
@@ -182,11 +216,12 @@ async fn reply(
     action: impl FnOnce(&mut Hall) -> Result<(), &'static str>,
 ) -> Response {
     let tools = app.tools.clone();
+    let game = app.game_on_wall(key).await;
     site::act(
         &app.halls,
         key,
         |hall, _| action(hall),
-        |hall, now| http::envelope(now, &hall.host_view(now, &tools)),
+        |hall, now| http::envelope(now, &hall.host_view(now, &tools, game)),
     )
     .await
 }
@@ -239,19 +274,24 @@ async fn join(
     Json(serde_json::json!({ "player": person })).into_response()
 }
 
-/// Takes somebody out of the hall, and out of every game it seated them
-/// in, so their phone stops and their name is free again.
+/// Takes somebody out of the hall, by the id the host's list gave them,
+/// and out of every game it seated them in, so their phone stops and their
+/// name is free again. The games are not asked: somebody the host has
+/// taken out of the room is out of every game in it.
 async fn remove(
     State(app): State<App>,
     Path(key): Path<String>,
-    Json(named): Json<lobby::Named>,
+    Json(removing): Json<lobby::Removing>,
 ) -> Response {
     let removed = app
         .halls
         .with(&key, |hall, _| {
-            let person = hall.lobby.named(&named.name).map(|p| p.key.clone());
-            let places = person.map(|p| hall.places(&p)).unwrap_or_default();
-            lobby::remove(hall, &named.name).map(|_| places)
+            let places = hall
+                .lobby
+                .by_id(removing.id)
+                .map(|p| hall.places(&p.key))
+                .unwrap_or_default();
+            lobby::remove(hall, removing.id).map(|_| places)
         })
         .await;
     let places = match removed {
@@ -285,41 +325,46 @@ async fn player_events(State(app): State<App>, Path(key): Path<String>) -> Respo
     .await
 }
 
-fn wall_json(hall: &Hall, now: u64, tools: &[Arc<dyn Tool>]) -> Option<String> {
-    serde_json::to_string(&hall.lobby.wall_view(now, hall.wall_game(tools))).ok()
+/// The hall's wall as JSON, moved on to now, or `None` when `wall` is not
+/// the wall key of the hall `key`. Looking does not keep the hall alive.
+async fn wall_json(app: &App, key: &str, wall: &str) -> Option<String> {
+    let game = app.game_on_wall(key).await;
+    app.halls
+        .look(key, |hall, now| {
+            if hall.lobby.wall != wall {
+                return None;
+            }
+            let view = hall
+                .lobby
+                .wall_view(now, hall.on_wall(game), hall.wall_part(&app.tools));
+            serde_json::to_string(&view).ok()
+        })
+        .await
+        .flatten()
 }
 
 async fn wall_state(State(app): State<App>, Path(wall): Path<String>) -> Response {
     let Some(key) = lobby::room_of(&app.halls, &wall).await else {
         return http::gone();
     };
-    let tools = app.tools.clone();
-    match app
-        .halls
-        .read(&key, |hall, now| {
-            (hall.lobby.wall == wall)
-                .then(|| wall_json(hall, now, &tools))
-                .flatten()
-                .map(|view| format!("{{\"now\":{now},\"view\":{view}}}"))
-        })
-        .await
-        .flatten()
-    {
-        Some(body) => http::json(body),
+    let now = now_ms();
+    match wall_json(&app, &key, &wall).await {
+        Some(view) => http::json(format!("{{\"now\":{now},\"view\":{view}}}")),
         None => http::gone(),
     }
 }
 
+/// The wall's stream, which follows what the game being played lets the
+/// room see. A wall left on does not keep the hall alive.
 async fn wall_events(State(app): State<App>, Path(wall): Path<String>) -> Response {
     let Some(key) = lobby::room_of(&app.halls, &wall).await else {
         return http::gone();
     };
-    let tools = app.tools.clone();
-    rooms::one_at(app.halls, key, move |hall, now| {
-        if hall.lobby.wall != wall {
-            return None;
-        }
-        wall_json(hall, now, &tools)
+    rooms::poll(move |_| {
+        let app = app.clone();
+        let key = key.clone();
+        let wall = wall.clone();
+        async move { wall_json(&app, &key, &wall).await }
     })
 }
 
@@ -368,21 +413,11 @@ fn games(dir: &std::path::Path) -> (Router, Vec<Arc<dyn Tool>>) {
         );
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(petrov),
-        Arc::new(Mount {
-            id: "numbers",
-            title: "Number games",
-            rooms: numbers,
-        }),
-        Arc::new(Mount {
-            id: "estimate",
-            title: "Estimation",
-            rooms: estimate,
-        }),
-        Arc::new(Mount {
-            id: "updating",
-            title: "Speed updating",
-            rooms: updating,
-        }),
+        // `Mount::with_lobby` once a game is on the lobby, so that the
+        // hall follows its `HasLobby::on_wall`.
+        Arc::new(Mount::new("numbers", "Number games", numbers)),
+        Arc::new(Mount::new("estimate", "Estimation", estimate)),
+        Arc::new(Mount::new("updating", "Speed updating", updating)),
     ];
     (routes, tools)
 }

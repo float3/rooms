@@ -7,7 +7,7 @@
 //! differs. A room with twenty phones on it and nothing happening costs
 //! one heartbeat every five seconds.
 
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Infallible, future::Future, sync::Arc, time::Duration};
 
 use axum::{
     http::header,
@@ -57,6 +57,34 @@ pub fn stream<R: Room>(
     rooms: Arc<Rooms<R>>,
     render: impl Fn(&mut HashMap<String, R>, u64) -> Option<String> + Send + 'static,
 ) -> Response {
+    // Shared with each tick's future. Only ever taken by the one task
+    // that runs this stream, so it is never waited on.
+    let render = Arc::new(std::sync::Mutex::new(render));
+    poll(move |now| {
+        let rooms = rooms.clone();
+        let render = render.clone();
+        async move {
+            let mut held = rooms.lock().await;
+            let render = render.lock().unwrap_or_else(|p| p.into_inner());
+            render(&mut held, now)
+        }
+    })
+}
+
+/// [`stream`], for a view that has to wait on something besides one
+/// store: a room in another tool, say, as the shared room's wall waits on
+/// the game it is showing. `next` is called four times a second with the
+/// time and answers with the view as JSON, or `None` to close the
+/// connection. As with [`stream`], an unchanged view is not sent again
+/// except as a heartbeat.
+///
+/// Do not hold a lock across the whole of `next` that the rest of the
+/// server waits on; take it, render, and let it go.
+pub fn poll<F, Fut>(mut next: F) -> Response
+where
+    F: FnMut(u64) -> Fut + Send + 'static,
+    Fut: Future<Output = Option<String>> + Send + 'static,
+{
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(4);
     tokio::spawn(async move {
         let mut last = String::new();
@@ -69,11 +97,7 @@ pub fn stream<R: Room>(
                 break;
             }
             let now = now_ms();
-            let view = {
-                let mut held = rooms.lock().await;
-                render(&mut held, now)
-            };
-            let Some(view) = view else { break };
+            let Some(view) = next(now).await else { break };
             if view != last || now.saturating_sub(last_sent) >= HEARTBEAT_MS {
                 let body = format!("{{\"now\":{now},\"view\":{view}}}");
                 if tx.send(Ok(Event::default().data(body))).await.is_err() {
@@ -110,15 +134,39 @@ pub fn one<R: Room>(
 }
 
 /// [`one`], for a view that depends on the time: who is connected, how
-/// long is left.
+/// long is left. The watcher counts as somebody using the room
+/// ([`Room::seen`]) for as long as it watches.
 pub fn one_at<R: Room>(
     rooms: Arc<Rooms<R>>,
     key: String,
     render: impl Fn(&R, u64) -> Option<String> + Send + 'static,
 ) -> Response {
+    watch_one(rooms, key, true, render)
+}
+
+/// [`one_at`], for a screen that only shows the room, such as a wall on a
+/// projector. It does not count as using the room, so a projector left
+/// on overnight does not keep a finished room alive: once the room
+/// expires, the stream closes.
+pub fn one_unseen<R: Room>(
+    rooms: Arc<Rooms<R>>,
+    key: String,
+    render: impl Fn(&R, u64) -> Option<String> + Send + 'static,
+) -> Response {
+    watch_one(rooms, key, false, render)
+}
+
+fn watch_one<R: Room>(
+    rooms: Arc<Rooms<R>>,
+    key: String,
+    seen: bool,
+    render: impl Fn(&R, u64) -> Option<String> + Send + 'static,
+) -> Response {
     stream(rooms.clone(), move |held, now| {
         let room = held.get_mut(&key)?;
-        room.seen(now);
+        if seen {
+            room.seen(now);
+        }
         if room.tick(now) {
             let view = render(room, now);
             rooms.save(held);
