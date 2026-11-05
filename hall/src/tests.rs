@@ -230,6 +230,29 @@ async fn a_game_this_server_does_not_play_is_refused() {
 }
 
 #[tokio::test]
+async fn a_player_streams_their_hall_and_a_stranger_is_turned_away() {
+    let app = server("stream");
+    let (_, _, ada, _) = hall(&app).await;
+    let open = |uri: String| {
+        let app = app.clone();
+        async move {
+            app.oneshot(Request::get(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+        }
+    };
+
+    let mut stream = open(format!("/api/p/{ada}/events")).await;
+    assert_eq!(stream.status(), StatusCode::OK);
+    let first = stream.body_mut().frame().await.unwrap().unwrap();
+    let first = String::from_utf8(first.into_data().unwrap().to_vec()).unwrap();
+    assert!(first.contains(r#""name":"Ada""#), "{first}");
+
+    let stranger = open("/api/p/nobody/events".into()).await;
+    assert_eq!(stranger.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn every_game_is_served_under_its_own_path_with_its_links_moved_there() {
     let app = server("paths");
     for game in ["petrov", "numbers", "estimate", "updating"] {

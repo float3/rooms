@@ -229,11 +229,19 @@ async fn player_state(State(app): State<App>, Path(key): Path<String>) -> Respon
     }
 }
 
+/// A player's stream. Their hall is looked up once, when the phone
+/// connects: looking for it on every tick walked every hall, four times a
+/// second per phone, under the lock that every other watcher waits on.
 async fn player_events(State(app): State<App>, Path(key): Path<String>) -> Response {
+    let Some(hall) = app
+        .halls
+        .find(|hall_key, hall| hall.has(&key).then(|| hall_key.to_string()))
+        .await
+    else {
+        return http::gone();
+    };
     let tools = app.tools.clone();
-    rooms::stream(app.halls, move |held, now| {
-        let hall = held.values_mut().find(|hall| hall.has(&key))?;
-        rooms::Room::seen(hall, now);
+    rooms::one(app.halls, hall, move |hall| {
         serde_json::to_string(&hall.player_view(&key, &tools)?).ok()
     })
 }
