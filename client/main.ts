@@ -9,6 +9,7 @@ import {
   type Present,
   api,
   byId,
+  confirmTap,
   connectedCount,
   countdown,
   el,
@@ -754,11 +755,39 @@ function host(key: string): void {
   };
 
   /** The facilitator's buttons, kept to one bar. */
+  /** The groups of the round just over that have not all answered and
+   *  guessed. Starting the next round, or ending the evening, drops what
+   *  they have not sent yet. */
+  const unfinished = (view: HostView): number =>
+    view.phase === "updating" && view.round ? view.round.groups.filter((g) => !g.settled).length : 0;
+
+  /** Sets a button's words, or, while it is asking to be tapped again,
+   *  the words it goes back to. */
+  const label = (id: string, words: string): void => {
+    const button = byId(id);
+    if (button.dataset.armed === "1") button.dataset.said = words;
+    else button.textContent = words;
+  };
+
+  /** Runs `then`, first asking for a second tap while groups are still
+   *  answering. */
+  const unlessUnfinished = (id: string, ask: (left: number) => string, then: () => Promise<void>) => async () => {
+    const button = byId(id);
+    const left = current ? unfinished(current) : 0;
+    if ((left || button.dataset.armed === "1") && !confirmTap(button, ask(left))) return;
+    await then();
+  };
+
   const drawControls = (view: HostView): void => {
     const talking = view.phase === "talking";
     const warm = view.phase === "warmup" ? view.warmup : null;
     text("h-phase", warm ? `Warm-up ${warm.number}` : PHASES[view.phase]);
-    byId("start").textContent = view.rounds ? `Start round ${view.rounds + 1}` : "Start the first round";
+    const left = unfinished(view);
+    label(
+      "start",
+      (view.rounds ? `Start round ${view.rounds + 1}` : "Start the first round") +
+        (left ? ` · ${plural(left, "pair", "pairs")} still answering` : ""),
+    );
     hide("start", talking || view.phase === "finished" || view.phase === "picking" || warm !== null);
     hide("close-picks", view.phase !== "picking");
     hide("stop", !talking);
@@ -905,11 +934,25 @@ function host(key: string): void {
     drawBoard(view);
   };
 
-  onClick("start", () => send("POST", "/round"));
+  onClick(
+    "start",
+    unlessUnfinished(
+      "start",
+      (left) => `${plural(left, "pair has", "pairs have")} not finished guessing. Start anyway?`,
+      () => send("POST", "/round"),
+    ),
+  );
   onClick("close-picks", () => send("POST", "/picks/close"));
   onClick("stop", () => send("POST", "/stop"));
   onClick("extend", () => send("POST", "/extend"));
-  onClick("finish", () => send("POST", "/finish"));
+  onClick(
+    "finish",
+    unlessUnfinished(
+      "finish",
+      (left) => `${plural(left, "pair has", "pairs have")} not finished guessing. End anyway?`,
+      () => send("POST", "/finish"),
+    ),
+  );
   onClick("reopen", () => send("POST", "/reopen"));
   onClick("warm-start", async () => {
     // From a revealed question, "next" ends it and asks another.
