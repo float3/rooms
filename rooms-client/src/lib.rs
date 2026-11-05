@@ -22,10 +22,10 @@ use std::{
     process::Command,
 };
 
-/// The TypeScript the three tools share.
+/// The TypeScript the tools share.
 pub const ROOMS_TS: &str = include_str!("../client/rooms.ts");
 
-/// The stylesheet the three tools share.
+/// The stylesheet the tools share.
 pub const ROOMS_CSS: &str = include_str!("../client/rooms.css");
 
 /// What the build step produced.

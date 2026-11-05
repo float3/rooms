@@ -7,6 +7,10 @@
 //! a game, the hall opens a room in it (or goes back to the one it opened
 //! earlier) and joins everybody into it by name. Phones show the game in a
 //! frame, and the frame moves when the host moves the room.
+//!
+//! The people are a `rooms::lobby`: a name already held by a connected
+//! phone is refused, the host can take somebody out, and the wall at
+//! `/w/<key>` shows the code, who is in, and the game's own wall.
 
 mod hall;
 
@@ -14,12 +18,12 @@ use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{FromRef, Path, State},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use rooms::{
-    Rooms, http, now_ms, site,
+    Rooms, http, lobby, now_ms, site,
     tool::{Mount, Tool},
 };
 use serde::Deserialize;
@@ -48,9 +52,21 @@ impl App {
     }
 }
 
+/// So that the lobby's own handlers can be routed here.
+impl FromRef<App> for Arc<Rooms<Hall>> {
+    fn from_ref(app: &App) -> Self {
+        app.halls.clone()
+    }
+}
+
 async fn open_hall(State(app): State<App>) -> Response {
     let now = now_ms();
-    site::open(&app.halls, |_| Hall::new(now), |hall| hall.join.clone()).await
+    site::open(
+        &app.halls,
+        |_| Hall::new(now),
+        |hall| hall.lobby.join.clone(),
+    )
+    .await
 }
 
 async fn host_state(State(app): State<App>, Path(key): Path<String>) -> Response {
@@ -58,7 +74,7 @@ async fn host_state(State(app): State<App>, Path(key): Path<String>) -> Response
     match app
         .halls
         .read(&key, |hall, now| {
-            http::envelope(now, &hall.host_view(&tools))
+            http::envelope(now, &hall.host_view(now, &tools))
         })
         .await
     {
@@ -69,8 +85,8 @@ async fn host_state(State(app): State<App>, Path(key): Path<String>) -> Response
 
 async fn host_events(State(app): State<App>, Path(key): Path<String>) -> Response {
     let tools = app.tools.clone();
-    rooms::one(app.halls, key, move |hall| {
-        serde_json::to_string(&hall.host_view(&tools)).ok()
+    rooms::one_at(app.halls, key, move |hall, now| {
+        serde_json::to_string(&hall.host_view(now, &tools)).ok()
     })
 }
 
@@ -81,8 +97,8 @@ struct Play {
 }
 
 /// Moves the room to a game. Opens a room in that game the first time,
-/// goes back to the same one after that, and joins everybody into it by
-/// name, which is harmless for anybody already in.
+/// goes back to the same one after that, and joins everybody into it,
+/// presenting the key each of them was given there before.
 async fn play(State(app): State<App>, Path(key): Path<String>, Json(play): Json<Play>) -> Response {
     let Some(id) = play.tool else {
         return reply(&app, &key, |hall| {
@@ -94,14 +110,14 @@ async fn play(State(app): State<App>, Path(key): Path<String>, Json(play): Json<
     let Some(tool) = app.tool(&id) else {
         return http::refused("That game is not one this server plays.");
     };
-    let Some((host, people)) = app
+    let Some((session, people)) = app
         .halls
-        .read(&key, |hall, _| (hall.game_host(&id), hall.people()))
+        .read(&key, |hall, _| (hall.session(&id), hall.people()))
         .await
     else {
         return http::gone();
     };
-    let seated = match seat_everybody(tool.as_ref(), host, &people).await {
+    let seated = match seat_everybody(tool.as_ref(), session, &people).await {
         Ok(seated) => seated,
         Err(message) => return http::refused(message),
     };
@@ -112,30 +128,39 @@ async fn play(State(app): State<App>, Path(key): Path<String>, Json(play): Json<
     .await
 }
 
-/// Joins everybody into `tool`'s room run with `host`, opening a room
-/// when there is none yet or the old one has expired.
+/// Joins everybody into `tool`'s room, opening one when there is none
+/// yet or the old one has expired. Somebody the game will not take is
+/// noted with the reason, and everybody else is still seated.
 async fn seat_everybody(
     tool: &dyn Tool,
-    host: Option<String>,
+    session: Option<(String, std::collections::HashMap<String, String>)>,
     people: &[(String, String)],
 ) -> Result<Seated, &'static str> {
-    let mut host = host;
+    let mut session = session;
     // Twice at most: the room the hall remembers, then a fresh one if
     // that one has expired.
     for _ in 0..2 {
-        let key = match host.take() {
-            Some(key) => key,
-            None => tool
-                .open()
-                .await
-                .ok_or("That game is full tonight. Try again later.")?,
+        let (host, known) = match session.take() {
+            Some(session) => session,
+            None => (
+                tool.open()
+                    .await
+                    .ok_or("That game is full tonight. Try again later.")?,
+                Default::default(),
+            ),
         };
-        let mut players = Vec::new();
+        let mut seated = Seated {
+            host: host.clone(),
+            players: Vec::new(),
+            refused: Vec::new(),
+            wall: None,
+        };
         let mut expired = false;
         for (person, name) in people {
-            match tool.join(&key, name).await {
-                Some(Ok(player)) => players.push((person.clone(), player)),
-                Some(Err(message)) => return Err(message),
+            let known = known.get(person).map(String::as_str);
+            match tool.rejoin(&host, known, name).await {
+                Some(Ok(player)) => seated.players.push((person.clone(), player)),
+                Some(Err(message)) => seated.refused.push((person.clone(), message.into())),
                 None => {
                     expired = true;
                     break;
@@ -143,7 +168,8 @@ async fn seat_everybody(
             }
         }
         if !expired {
-            return Ok(Seated { host: key, players });
+            seated.wall = tool.wall(&host).await;
+            return Ok(seated);
         }
     }
     Err("That game could not be opened. Try again.")
@@ -160,81 +186,140 @@ async fn reply(
         &app.halls,
         key,
         |hall, _| action(hall),
-        |hall, now| http::envelope(now, &hall.host_view(&tools)),
+        |hall, now| http::envelope(now, &hall.host_view(now, &tools)),
     )
     .await
 }
 
-#[derive(Deserialize)]
-struct Named {
-    name: String,
-}
-
-/// Joins the hall, and the game it is playing if there is one.
+/// Joins the hall by its rules, then the game it is playing if there is
+/// one. If the game will not take them, their phone is told why.
 async fn join(
     State(app): State<App>,
     Path(join): Path<String>,
-    Json(named): Json<Named>,
+    Json(joining): Json<lobby::Joining>,
 ) -> Response {
-    let Some(key) = app.halls.key_where(|hall| hall.join == join).await else {
+    let Some(key) = lobby::room_of(&app.halls, &join).await else {
         return http::gone();
     };
     let added = app
         .halls
         .with(&key, |hall, now| {
-            hall.add(&named.name, now)
-                .map(|(person, name)| (person, name, hall.current_game()))
+            if hall.lobby.join != join {
+                return None;
+            }
+            Some(
+                lobby::admit(hall, &joining.name, joining.key.as_deref(), now).map(|person| {
+                    let name = hall.lobby.player(&person).map(|p| p.name.clone());
+                    let playing = hall
+                        .current_game()
+                        .map(|(id, host)| (hall.seat_in(&id, &person), id, host));
+                    (person, name.unwrap_or_default(), playing)
+                }),
+            )
         })
-        .await;
+        .await
+        .flatten();
     let (person, name, playing) = match added {
         None => return http::gone(),
         Some(Err(message)) => return http::refused(message),
         Some(Ok(added)) => added,
     };
-    if let Some((id, host)) = playing
+    if let Some((known, id, host)) = playing
         && let Some(tool) = app.tool(&id)
-        && let Some(Ok(player)) = tool.join(&host, &name).await
     {
+        let seated = match tool.rejoin(&host, known.as_deref(), &name).await {
+            Some(Ok(player)) => Ok(player),
+            Some(Err(message)) => Err(message.to_string()),
+            None => Err("That game has closed. Ask the host to pick it again.".to_string()),
+        };
         app.halls
-            .with(&key, |hall, _| hall.seat(&id, &person, player))
+            .with(&key, |hall, _| hall.seat(&id, &host, &person, seated))
             .await;
     }
     Json(serde_json::json!({ "player": person })).into_response()
 }
 
-/// How many people are in already, which the join page shows.
-async fn how_many(State(app): State<App>, Path(join): Path<String>) -> Response {
-    match app
+/// Takes somebody out of the hall, and out of every game it seated them
+/// in, so their phone stops and their name is free again.
+async fn remove(
+    State(app): State<App>,
+    Path(key): Path<String>,
+    Json(named): Json<lobby::Named>,
+) -> Response {
+    let removed = app
         .halls
-        .find(|_, hall| (hall.join == join).then(|| hall.people().len()))
-        .await
-    {
-        Some(players) => Json(serde_json::json!({ "players": players })).into_response(),
-        None => http::gone(),
+        .with(&key, |hall, _| {
+            let person = hall.lobby.named(&named.name).map(|p| p.key.clone());
+            let places = person.map(|p| hall.places(&p)).unwrap_or_default();
+            lobby::remove(hall, &named.name).map(|_| places)
+        })
+        .await;
+    let places = match removed {
+        None => return http::gone(),
+        Some(Err(message)) => return http::refused(message),
+        Some(Ok(places)) => places,
+    };
+    for (id, host, player) in places {
+        if let Some(tool) = app.tool(&id) {
+            tool.leave(&host, &player).await;
+        }
     }
+    reply(&app, &key, |_| Ok(())).await
 }
 
 async fn player_state(State(app): State<App>, Path(key): Path<String>) -> Response {
     let tools = app.tools.clone();
+    lobby::player_state(&app.halls, &key, |hall, key, _| {
+        serde_json::to_string(&hall.player_view(key, &tools)?).ok()
+    })
+    .await
+}
+
+/// A player's stream. Their hall is found once, through the index, when
+/// the phone connects, rather than by walking every hall on every tick.
+async fn player_events(State(app): State<App>, Path(key): Path<String>) -> Response {
+    let tools = app.tools.clone();
+    lobby::player_events(app.halls, key, move |hall, key, _| {
+        serde_json::to_string(&hall.player_view(key, &tools)?).ok()
+    })
+    .await
+}
+
+fn wall_json(hall: &Hall, now: u64, tools: &[Arc<dyn Tool>]) -> Option<String> {
+    serde_json::to_string(&hall.lobby.wall_view(now, hall.wall_game(tools))).ok()
+}
+
+async fn wall_state(State(app): State<App>, Path(wall): Path<String>) -> Response {
+    let Some(key) = lobby::room_of(&app.halls, &wall).await else {
+        return http::gone();
+    };
+    let tools = app.tools.clone();
     match app
         .halls
-        .find(|_, hall| {
-            hall.player_view(&key, &tools)
-                .map(|view| http::envelope(now_ms(), &view))
+        .read(&key, |hall, now| {
+            (hall.lobby.wall == wall)
+                .then(|| wall_json(hall, now, &tools))
+                .flatten()
+                .map(|view| format!("{{\"now\":{now},\"view\":{view}}}"))
         })
         .await
+        .flatten()
     {
         Some(body) => http::json(body),
         None => http::gone(),
     }
 }
 
-async fn player_events(State(app): State<App>, Path(key): Path<String>) -> Response {
+async fn wall_events(State(app): State<App>, Path(wall): Path<String>) -> Response {
+    let Some(key) = lobby::room_of(&app.halls, &wall).await else {
+        return http::gone();
+    };
     let tools = app.tools.clone();
-    rooms::stream(app.halls, move |held, now| {
-        let hall = held.values_mut().find(|hall| hall.has(&key))?;
-        rooms::Room::seen(hall, now);
-        serde_json::to_string(&hall.player_view(&key, &tools)?).ok()
+    rooms::one_at(app.halls, key, move |hall, now| {
+        if hall.lobby.wall != wall {
+            return None;
+        }
+        wall_json(hall, now, &tools)
     })
 }
 
@@ -245,9 +330,12 @@ fn router(app: App, games: Router) -> Router {
         .route("/api/h/{key}", get(host_state))
         .route("/api/h/{key}/events", get(host_events))
         .route("/api/h/{key}/play", post(play))
-        .route("/api/j/{key}", get(how_many).post(join))
+        .route("/api/h/{key}/remove", post(remove))
+        .route("/api/j/{key}", get(lobby::count::<Hall>).post(join))
         .route("/api/p/{key}", get(player_state))
         .route("/api/p/{key}/events", get(player_events))
+        .route("/api/w/{key}", get(wall_state))
+        .route("/api/w/{key}/events", get(wall_events))
         .with_state(app)
         .merge(games)
 }

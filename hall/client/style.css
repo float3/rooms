@@ -167,3 +167,42 @@ body.playing main {
 #waiting-count {
   margin-top: 12px;
 }
+
+/* The hall's wall: the game's own wall in a frame under the names. */
+.wall-playing {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.4rem, 3vw, 2.6rem);
+}
+
+.wall-frame {
+  display: block;
+  width: 100%;
+  min-height: 55vh;
+  border: 0;
+  margin-top: 16px;
+  background: transparent;
+}
+
+/* The roster's rows as the lobby's chips. */
+.people.roster li {
+  border-bottom: 0;
+  min-height: 40px;
+  gap: 8px;
+}
+
+.people.roster .remove {
+  min-height: 32px;
+  padding: 2px 10px;
+}
+
+.strip-people {
+  margin: 10px 0 0;
+}
+
+.strip-people summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+}

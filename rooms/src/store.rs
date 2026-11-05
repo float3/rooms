@@ -30,10 +30,23 @@ pub trait Room: Serialize + DeserializeOwned + Send + Sync + 'static {
 
     /// Whether this room can be deleted. Called every few minutes.
     fn expired(&self, now: u64) -> bool;
+
+    /// Every key other than its own that this room answers to: its join
+    /// key, its wall key, each player's key. [`Rooms`] keeps an index from
+    /// these to the room, so that [`Rooms::locate`] finds a player's room
+    /// without looking through every room. The default is none, which
+    /// leaves the tool to [`Rooms::find`] as before.
+    fn keys(&self) -> Vec<&str> {
+        Vec::new()
+    }
 }
 
 pub struct Rooms<R: Room> {
     rooms: Mutex<HashMap<String, R>>,
+    /// Each key a room hands out ([`Room::keys`]), to the room's own key.
+    /// Rebuilt whenever the rooms are saved, which is whenever a request
+    /// changes one. Always taken after `rooms`, never held across an await.
+    index: std::sync::Mutex<HashMap<String, String>>,
     path: PathBuf,
     /// A limit, so that a script cannot fill the disk by opening rooms.
     max: usize,
@@ -41,18 +54,31 @@ pub struct Rooms<R: Room> {
 
 type Held<'a, R> = MutexGuard<'a, HashMap<String, R>>;
 
+fn index_of<R: Room>(rooms: &HashMap<String, R>) -> HashMap<String, String> {
+    rooms
+        .iter()
+        .flat_map(|(own, room)| {
+            room.keys()
+                .into_iter()
+                .map(move |key| (key.to_string(), own.clone()))
+        })
+        .collect()
+}
+
 impl<R: Room> Rooms<R> {
     /// Rooms from `path`, or no rooms if the file is missing or will not
     /// parse. Refusing to start over an unreadable file would be worse
     /// than losing the rooms in it, which are usually over by then.
     pub fn load(path: impl Into<PathBuf>, max: usize) -> Arc<Self> {
         let path = path.into();
-        let rooms = fs::read_to_string(&path)
+        let rooms: HashMap<String, R> = fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
+        let index = std::sync::Mutex::new(index_of(&rooms));
         Arc::new(Rooms {
             rooms: Mutex::new(rooms),
+            index,
             path,
             max,
         })
@@ -98,6 +124,17 @@ impl<R: Room> Rooms<R> {
         rooms.iter().find_map(|(key, room)| f(key, room))
     }
 
+    /// The room that handed out `key`, by the index of [`Room::keys`]. One
+    /// lookup, instead of [`Rooms::find`] walking every room under the
+    /// lock that every request and stream waits on.
+    pub fn locate(&self, key: &str) -> Option<String> {
+        self.index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(key)
+            .cloned()
+    }
+
     /// The key of the first room `f` holds for: the room a join link
     /// belongs to, say, when the room is stored under the host's key.
     pub async fn key_where(&self, f: impl Fn(&R) -> bool) -> Option<String> {
@@ -121,6 +158,12 @@ impl<R: Room> Rooms<R> {
     /// calls it already. It is public for a tool that changes a room from
     /// inside a [`crate::stream`] render closure, which holds the map.
     pub fn save(&self, rooms: &HashMap<String, R>) {
+        // Cheaper than the serialising below, and keeps the index right
+        // whatever changed.
+        *self
+            .index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = index_of(rooms);
         let Ok(body) = serde_json::to_string(rooms) else {
             eprintln!("rooms: could not serialise, not saving");
             return;
@@ -141,13 +184,16 @@ impl<R: Room> Rooms<R> {
     pub async fn sweep(self: Arc<Self>, every: std::time::Duration) {
         loop {
             tokio::time::sleep(every).await;
-            let now = now_ms();
-            let mut rooms = self.rooms.lock().await;
-            let before = rooms.len();
-            rooms.retain(|_, room| !room.expired(now));
-            if rooms.len() != before {
-                self.save(&rooms);
-            }
+            self.sweep_once(now_ms()).await;
+        }
+    }
+
+    async fn sweep_once(&self, now: u64) {
+        let mut rooms = self.rooms.lock().await;
+        let before = rooms.len();
+        rooms.retain(|_, room| !room.expired(now));
+        if rooms.len() != before {
+            self.save(&rooms);
         }
     }
 
@@ -281,6 +327,49 @@ mod tests {
             .find(|k, r| (r.label == "player-token").then(|| k.to_string()))
             .await;
         assert_eq!(found, Some(key));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct Keyed {
+        handed: Vec<String>,
+    }
+
+    impl Room for Keyed {
+        fn expired(&self, _now: u64) -> bool {
+            self.handed.is_empty()
+        }
+        fn keys(&self) -> Vec<&str> {
+            self.handed.iter().map(String::as_str).collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_room_is_located_by_a_key_it_handed_out_without_a_search() {
+        let path =
+            std::env::temp_dir().join(format!("rooms-test-index-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let rooms: Arc<Rooms<Keyed>> = Rooms::load(&path, 3);
+        let own = rooms
+            .create(|_| Keyed {
+                handed: vec!["a".into()],
+            })
+            .await
+            .unwrap();
+        assert_eq!(rooms.locate("a"), Some(own.clone()));
+        assert_eq!(rooms.locate("b"), None);
+
+        rooms.with(&own, |r, _| r.handed = vec!["b".into()]).await;
+        assert_eq!(rooms.locate("a"), None, "a key given back is forgotten");
+        assert_eq!(rooms.locate("b"), Some(own.clone()));
+
+        let again: Arc<Rooms<Keyed>> = Rooms::load(&path, 3);
+        assert_eq!(again.locate("b"), Some(own.clone()), "and rebuilt on load");
+
+        rooms.with(&own, |r, _| r.handed.clear()).await;
+        rooms.sweep_once(now_ms()).await;
+        assert_eq!(rooms.len().await, 0);
+        assert_eq!(rooms.locate("b"), None, "and a swept room is forgotten");
         let _ = fs::remove_file(&path);
     }
 

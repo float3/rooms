@@ -4,17 +4,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use rooms::lobby::{HasLobby, Lobby, Present};
 use rooms::tool::Tool;
 use serde::{Deserialize, Serialize};
-
-pub const MAX_PEOPLE: usize = 200;
-pub const MAX_NAME: usize = 32;
-
-#[derive(Serialize, Deserialize)]
-pub struct Person {
-    pub key: String,
-    pub name: String,
-}
+use serde_json::Value;
 
 /// The room a hall opened in one game.
 #[derive(Serialize, Deserialize, Default)]
@@ -23,19 +16,31 @@ pub struct Session {
     pub host: String,
     /// Each person's player key in it, by their key in the hall.
     pub players: HashMap<String, String>,
+    /// Why the game would not take somebody, by their key in the hall,
+    /// so their phone can say so instead of waiting.
+    #[serde(default)]
+    pub refused: HashMap<String, String>,
+    /// The game room's wall key, for a game that has a wall.
+    #[serde(default)]
+    pub wall: Option<String>,
 }
 
-/// Everybody joined into a game's room.
+/// Everybody joined into a game's room, or turned away from it.
 pub struct Seated {
     pub host: String,
     /// (key in the hall, key in the game)
     pub players: Vec<(String, String)>,
+    /// (key in the hall, why the game would not take them)
+    pub refused: Vec<(String, String)>,
+    pub wall: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Hall {
-    pub join: String,
-    pub people: Vec<Person>,
+    /// The join key, the wall key and the people. Saved as `join` and
+    /// `people` before the lobby, which still loads.
+    #[serde(flatten)]
+    pub lobby: Lobby,
     /// The game being played, by its id.
     pub current: Option<String>,
     /// Every game this hall has played, so that going back to one picks up
@@ -52,15 +57,29 @@ impl rooms::Room for Hall {
     fn expired(&self, now: u64) -> bool {
         self.seen + rooms::DAY_MS < now
     }
+
+    fn keys(&self) -> Vec<&str> {
+        self.lobby.keys().collect()
+    }
 }
 
-fn tidy(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(MAX_NAME)
-        .collect()
+impl HasLobby for Hall {
+    fn lobby(&self) -> &Lobby {
+        &self.lobby
+    }
+
+    fn lobby_mut(&mut self) -> &mut Lobby {
+        &mut self.lobby
+    }
+
+    /// Forgets their place in every game. Taking them out of the games
+    /// themselves is the handler's job, because that waits on the games.
+    fn left(&mut self, key: &str) {
+        for session in self.games.values_mut() {
+            session.players.remove(key);
+            session.refused.remove(key);
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -76,12 +95,17 @@ pub struct Playing {
     /// The page to show in the frame. For a player who could not be
     /// joined into the game, nothing.
     url: Option<String>,
+    /// Why the game would not take this player.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refused: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct HostView<'a> {
     join: &'a str,
-    people: Vec<&'a str>,
+    /// The wall's key: its link grants nothing, so it can be projected.
+    wall: &'a str,
+    people: Vec<Present<'a>>,
     games: Vec<Game>,
     playing: Option<Playing>,
 }
@@ -103,8 +127,7 @@ fn title(tools: &[Arc<dyn Tool>], id: &str) -> &'static str {
 impl Hall {
     pub fn new(now: u64) -> Hall {
         Hall {
-            join: rooms::key::new(),
-            people: Vec::new(),
+            lobby: Lobby::new(),
             current: None,
             games: BTreeMap::new(),
             seen: now,
@@ -113,54 +136,51 @@ impl Hall {
 
     /// Everybody, as (key, name).
     pub fn people(&self) -> Vec<(String, String)> {
-        self.people
+        self.lobby
+            .players
             .iter()
             .map(|p| (p.key.clone(), p.name.clone()))
             .collect()
     }
 
-    pub fn has(&self, key: &str) -> bool {
-        self.people.iter().any(|p| p.key == key)
-    }
-
-    pub fn game_host(&self, id: &str) -> Option<String> {
-        self.games.get(id).map(|session| session.host.clone())
-    }
-
     /// The game being played and its host key.
     pub fn current_game(&self) -> Option<(String, String)> {
         let id = self.current.clone()?;
-        let host = self.game_host(&id)?;
+        let host = self.games.get(&id)?.host.clone();
         Some((id, host))
     }
 
-    /// Adds somebody and answers with their key and their name as kept. A
-    /// name already in the room answers with that person's key, so a
-    /// phone that lost its link can join again as the same person.
-    pub fn add(&mut self, name: &str, now: u64) -> Result<(String, String), &'static str> {
-        let name = tidy(name);
-        if name.is_empty() {
-            return Err("Please give a name, so the room knows who you are.");
-        }
-        if let Some(person) = self.people.iter().find(|p| p.name == name) {
-            return Ok((person.key.clone(), name));
-        }
-        if self.people.len() >= MAX_PEOPLE {
-            return Err("This room is full.");
-        }
-        let key = rooms::key::new();
-        self.people.push(Person {
-            key: key.clone(),
-            name: name.clone(),
-        });
-        self.seen = now;
-        Ok((key, name))
+    /// The room the hall opened in game `id`, and each person's key in
+    /// it, for joining them in again.
+    pub fn session(&self, id: &str) -> Option<(String, HashMap<String, String>)> {
+        self.games
+            .get(id)
+            .map(|session| (session.host.clone(), session.players.clone()))
     }
 
-    /// Records somebody's key in a game.
-    pub fn seat(&mut self, id: &str, person: &str, player: String) {
-        if let Some(session) = self.games.get_mut(id) {
-            session.players.insert(person.to_string(), player);
+    /// `person`'s key in game `id`, if they were seated there.
+    pub fn seat_in(&self, id: &str, person: &str) -> Option<String> {
+        self.games.get(id)?.players.get(person).cloned()
+    }
+
+    /// Records somebody's key in a game, or why the game would not take
+    /// them. Only if the game is still on the room `host`: the host may
+    /// have moved on, or the room been replaced, while they were joined.
+    pub fn seat(&mut self, id: &str, host: &str, person: &str, seated: Result<String, String>) {
+        if self.lobby.player(person).is_none() {
+            return; // taken out in the meantime
+        }
+        let Some(session) = self.games.get_mut(id).filter(|s| s.host == host) else {
+            return;
+        };
+        match seated {
+            Ok(player) => {
+                session.refused.remove(person);
+                session.players.insert(person.to_string(), player);
+            }
+            Err(message) => {
+                session.refused.insert(person.to_string(), message);
+            }
         }
     }
 
@@ -171,17 +191,37 @@ impl Hall {
         if session.host != seated.host {
             *session = Session {
                 host: seated.host,
-                players: HashMap::new(),
+                ..Session::default()
             };
         }
-        session.players.extend(seated.players);
+        session.wall = seated.wall;
+        for (person, player) in seated.players {
+            session.refused.remove(&person);
+            session.players.insert(person, player);
+        }
+        for (person, message) in seated.refused {
+            session.refused.insert(person, message);
+        }
         self.current = Some(id.to_string());
     }
 
-    pub fn host_view(&self, tools: &[Arc<dyn Tool>]) -> HostView<'_> {
+    /// Where somebody is seated in each game: what to take them out of
+    /// when the host removes them. (game id, game host, player key)
+    pub fn places(&self, person: &str) -> Vec<(String, String, String)> {
+        self.games
+            .iter()
+            .filter_map(|(id, session)| {
+                let player = session.players.get(person)?;
+                Some((id.clone(), session.host.clone(), player.clone()))
+            })
+            .collect()
+    }
+
+    pub fn host_view(&self, now: u64, tools: &[Arc<dyn Tool>]) -> HostView<'_> {
         HostView {
-            join: &self.join,
-            people: self.people.iter().map(|p| p.name.as_str()).collect(),
+            join: &self.lobby.join,
+            wall: &self.lobby.wall,
+            people: self.lobby.roster(now),
             games: tools
                 .iter()
                 .map(|tool| Game {
@@ -192,25 +232,47 @@ impl Hall {
             playing: self.current_game().map(|(id, host)| Playing {
                 title: title(tools, &id),
                 url: Some(format!("/{id}/h/{host}")),
+                refused: None,
                 id,
             }),
         }
     }
 
     pub fn player_view(&self, key: &str, tools: &[Arc<dyn Tool>]) -> Option<PlayerView<'_>> {
-        let person = self.people.iter().find(|p| p.key == key)?;
+        let person = self.lobby.player(key)?;
         Some(PlayerView {
             name: &person.name,
-            people: self.people.len(),
-            playing: self.current.as_ref().map(|id| Playing {
-                id: id.clone(),
-                title: title(tools, id),
-                url: self
-                    .games
-                    .get(id)
-                    .and_then(|session| session.players.get(key))
-                    .map(|player| format!("/{id}/p/{player}")),
+            people: self.lobby.len(),
+            playing: self.current.as_ref().map(|id| {
+                let session = self.games.get(id);
+                Playing {
+                    id: id.clone(),
+                    title: title(tools, id),
+                    url: session
+                        .and_then(|session| session.players.get(key))
+                        .map(|player| format!("/{id}/p/{player}")),
+                    refused: session.and_then(|session| session.refused.get(key).cloned()),
+                }
             }),
         })
+    }
+
+    /// The hall's part of its wall: the game being played, and that
+    /// game's own wall to show in a frame, if it has one. What a game puts
+    /// on its wall is the game's to decide; see
+    /// `rooms::lobby::HasLobby::wall`.
+    pub fn wall_game(&self, tools: &[Arc<dyn Tool>]) -> Value {
+        match self.current.as_ref() {
+            None => Value::Null,
+            Some(id) => serde_json::json!({
+                "id": id,
+                "title": title(tools, id),
+                "frame": self
+                    .games
+                    .get(id)
+                    .and_then(|session| session.wall.as_ref())
+                    .map(|wall| format!("/{id}/w/{wall}")),
+            }),
+        }
     }
 }

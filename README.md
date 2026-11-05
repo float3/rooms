@@ -27,6 +27,7 @@ used by [petrov](https://github.com/float3/petrov),
 | `rooms::key` | 24 random alphanumeric characters |
 | `rooms::http` | the JSON responses these tools answer with |
 | `rooms::site` | the page and its files, the clock, QR codes, opening a room and answering a host action |
+| `rooms::lobby` | who is in a room: names, keys, who is connected, the host taking somebody out, and the wall |
 | `rooms::tool` | what a tool implements so the shared room can open its rooms and join people into them by name |
 | `rooms::listen` | the socket systemd passed in, or a bound address; `rooms::serve` listens and serves |
 | `rooms-client` | the TypeScript and CSS the pages share, and the build step that compiles them |
@@ -44,9 +45,43 @@ impl Room for Lobby {
 that runs out of time. it returns whether anything changed, so a watcher
 is only sent an update when there is one.
 
+`keys` lists every key the room hands out besides its own: the join key,
+the wall key, each player's key. the store keeps an index from them to
+the room, so `Rooms::locate` finds a player's room in one lookup instead
+of walking every room under the lock.
+
+## the lobby
+
+`rooms::lobby` is the joining, presence and kicking every game had its
+own copy of. a game keeps a `Lobby` in its room and implements
+`HasLobby`; `lobby::routes()` then serves joining, the join count, the
+host's "remove" and the wall.
+
+- a name held by somebody whose phone is connected is refused: "That
+  name is taken." a name held by somebody whose phone has gone gets that
+  player's key back, and a phone that kept its key always gets back in.
+  names are compared without case or extra spaces.
+- a player is connected while their event stream is open: the stream
+  marks them seen four times a second, and the host sees a dot by each
+  name.
+- the host can take somebody out. their stream closes, their link stops
+  working, and their name is free again.
+- `HasLobby::arrived` is the game's hook for seating somebody new: deal
+  them a card, put them on a team. the seat it returns is kept with them.
+- the wall, `/w/<key>`, is a read-only page for a projector: a large QR
+  code and the join link, who is in and connected, and whatever the game
+  puts there with `HasLobby::wall`. it has a key of its own, which grants
+  nothing, because a projected address bar can be photographed: the
+  host's key never goes on the wall.
+
+`rooms-client` has the screens to go with it: `wall`, `roster`,
+`shareLink`, `wallButton`, `keepAwake`, `showConnection` (a
+"Reconnecting…" notice) and `confirmTap` (press again to confirm).
+
 ## one room for every game
 
-`hall/` is a server that runs [numbers](https://github.com/float3/numbers),
+`hall/` is a server that runs [petrov](https://github.com/float3/petrov),
+[numbers](https://github.com/float3/numbers),
 [estimate](https://github.com/float3/estimate) and
 [updating](https://github.com/float3/updating) together, each under its
 own path, with a room of its own on top. The room has one join link and
@@ -65,15 +100,21 @@ game's rooms in the directory `HALL_STATE`, one JSON file each. the flake
 has a NixOS module for it, `services.rooms-hall`, with the same sandbox
 as the games on their own.
 
-petrov is not in it: a Petrov Day game is two countries with a link
-each, not a host and a room of players.
+petrov is in it with a seat per person: each name goes to the country
+with fewer people in it.
+
+the hall's people are a lobby too, with a wall at `/w/<key>` that shows
+the code, who is in, and the current game's own wall in a frame. the
+host can take somebody out of the hall and every game it seated them in.
+when a game will not take somebody, their phone says why instead of
+waiting.
 
 ## the browser code
 
 `rooms-client` is the second crate. it holds the TypeScript and the
-stylesheet the three pages share: the event stream, the request helper,
-number formatting, the QR code, and the styles for panels, tables and
-buttons.
+stylesheet the pages share: the event stream, the request helper,
+number formatting, the QR code, the lobby's screens, and the styles for
+panels, tables and buttons.
 
 none of these repositories contain hand-written JavaScript. a tool keeps
 its TypeScript in `client/`, calls `rooms_client::bundle("client")` from

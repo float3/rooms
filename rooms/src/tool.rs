@@ -17,10 +17,38 @@ pub type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait Joinable: Room {
     /// A new, empty room.
     fn open(now: u64) -> Self;
-    /// Adds somebody by name and answers with their player key. A name
-    /// already in the room answers with that player's key, so joining
-    /// twice is harmless.
+    /// Adds somebody by name and answers with their player key. With a
+    /// [`crate::lobby::Lobby`], this is `lobby::admit(self, name, None, now)`.
     fn join(&mut self, name: &str, now: u64) -> Result<String, &'static str>;
+
+    /// Adds somebody the shared room seated here before, under `known`,
+    /// the key this room gave them then. A room with a lobby answers with
+    /// that key while it is still somebody's, so the shared room can move
+    /// back to a game without tripping over "that name is taken": that is
+    /// `lobby::admit(self, name, known, now)`. The default joins by name.
+    fn rejoin(
+        &mut self,
+        known: Option<&str>,
+        name: &str,
+        now: u64,
+    ) -> Result<String, &'static str> {
+        let _ = known;
+        self.join(name, now)
+    }
+
+    /// Takes the player with `key` out, because the shared room's host
+    /// took them out of the room. Answers whether there was anybody to
+    /// take out. The default keeps everybody.
+    fn leave(&mut self, key: &str) -> bool {
+        let _ = key;
+        false
+    }
+
+    /// The key of this room's wall, `/w/<key>`, for the shared room to
+    /// show on its own. The default is no wall.
+    fn wall(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// What the shared room needs from a tool.
@@ -39,6 +67,31 @@ pub trait Tool: Send + Sync {
         host: &'a str,
         name: &'a str,
     ) -> Boxed<'a, Option<Result<String, &'static str>>>;
+
+    /// Joins `name` again, presenting `known`, the key the room gave them
+    /// last time. See [`Joinable::rejoin`]. The default joins by name.
+    fn rejoin<'a>(
+        &'a self,
+        host: &'a str,
+        known: Option<&'a str>,
+        name: &'a str,
+    ) -> Boxed<'a, Option<Result<String, &'static str>>> {
+        let _ = known;
+        self.join(host, name)
+    }
+
+    /// Takes the player with `key` out of the room run with `host`. `None`
+    /// when that room is gone. The default takes nobody out.
+    fn leave<'a>(&'a self, host: &'a str, key: &'a str) -> Boxed<'a, Option<bool>> {
+        let _ = (host, key);
+        Box::pin(async { Some(false) })
+    }
+
+    /// The wall key of the room run with `host`, if it has a wall.
+    fn wall<'a>(&'a self, host: &'a str) -> Boxed<'a, Option<String>> {
+        let _ = host;
+        Box::pin(async { None })
+    }
 }
 
 /// A tool's store, as a [`Tool`].
@@ -73,6 +126,32 @@ impl<R: Joinable> Tool for Mount<R> {
             self.rooms
                 .with(host, |room, now| room.join(name, now))
                 .await
+        })
+    }
+
+    fn rejoin<'a>(
+        &'a self,
+        host: &'a str,
+        known: Option<&'a str>,
+        name: &'a str,
+    ) -> Boxed<'a, Option<Result<String, &'static str>>> {
+        Box::pin(async move {
+            self.rooms
+                .with(host, |room, now| room.rejoin(known, name, now))
+                .await
+        })
+    }
+
+    fn leave<'a>(&'a self, host: &'a str, key: &'a str) -> Boxed<'a, Option<bool>> {
+        Box::pin(async move { self.rooms.with(host, |room, _| room.leave(key)).await })
+    }
+
+    fn wall<'a>(&'a self, host: &'a str) -> Boxed<'a, Option<String>> {
+        Box::pin(async move {
+            self.rooms
+                .read(host, |room, _| room.wall().map(str::to_string))
+                .await
+                .flatten()
         })
     }
 }
@@ -118,6 +197,92 @@ mod tests {
         assert_eq!(tool.join(&host, "Ada").await, Some(Ok("player-Ada".into())));
         assert_eq!(tool.join(&host, "Ada").await, Some(Ok("player-Ada".into())));
         assert_eq!(tool.join("not-a-room", "Ada").await, None);
+        assert_eq!(
+            tool.rejoin(&host, Some("player-Ada"), "Ada").await,
+            Some(Ok("player-Ada".into())),
+            "a tool without rejoin joins by name"
+        );
+        assert_eq!(tool.leave(&host, "player-Ada").await, Some(false));
+        assert_eq!(tool.wall(&host).await, None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct WithLobby {
+        #[serde(flatten)]
+        lobby: crate::lobby::Lobby,
+    }
+
+    impl Room for WithLobby {
+        fn expired(&self, _now: u64) -> bool {
+            false
+        }
+        fn keys(&self) -> Vec<&str> {
+            self.lobby.keys().collect()
+        }
+    }
+
+    impl crate::lobby::HasLobby for WithLobby {
+        fn lobby(&self) -> &crate::lobby::Lobby {
+            &self.lobby
+        }
+        fn lobby_mut(&mut self) -> &mut crate::lobby::Lobby {
+            &mut self.lobby
+        }
+    }
+
+    impl Joinable for WithLobby {
+        fn open(_now: u64) -> Self {
+            WithLobby {
+                lobby: crate::lobby::Lobby::new(),
+            }
+        }
+        fn join(&mut self, name: &str, now: u64) -> Result<String, &'static str> {
+            crate::lobby::admit(self, name, None, now)
+        }
+        fn rejoin(
+            &mut self,
+            known: Option<&str>,
+            name: &str,
+            now: u64,
+        ) -> Result<String, &'static str> {
+            crate::lobby::admit(self, name, known, now)
+        }
+        fn leave(&mut self, key: &str) -> bool {
+            self.lobby.remove(key).is_some()
+        }
+        fn wall(&self) -> Option<&str> {
+            Some(&self.lobby.wall)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_with_a_lobby_is_rejoined_by_key_and_can_be_left() {
+        let path =
+            std::env::temp_dir().join(format!("rooms-tool-lobby-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let rooms = Rooms::<WithLobby>::load(&path, 4);
+        let tool: Box<dyn Tool> = Box::new(Mount {
+            id: "toy",
+            title: "Toy",
+            rooms: rooms.clone(),
+        });
+        let host = tool.open().await.unwrap();
+        let ada = tool.join(&host, "Ada").await.unwrap().unwrap();
+        assert!(
+            tool.join(&host, "Ada").await.unwrap().is_err(),
+            "Ada has only just joined, so her name is taken"
+        );
+        assert_eq!(
+            tool.rejoin(&host, Some(&ada), "Ada").await,
+            Some(Ok(ada.clone())),
+            "but the hall, which holds her key, gets her back"
+        );
+        let wall = tool.wall(&host).await.expect("a wall");
+        assert_eq!(rooms.locate(&wall), Some(host.clone()));
+        assert_eq!(tool.leave(&host, &ada).await, Some(true));
+        assert_eq!(tool.leave(&host, &ada).await, Some(false));
+        assert_eq!(tool.leave("gone", &ada).await, None);
         let _ = std::fs::remove_file(&path);
     }
 }
