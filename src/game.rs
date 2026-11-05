@@ -190,6 +190,13 @@ pub struct Sheet {
     /// In the pick mode, the statements they would like to talk about.
     #[serde(default)]
     pub picks: BTreeSet<u32>,
+    /// Sitting rounds out: at the bar, gone home, or just resting. Not
+    /// paired, and not suggested to anybody as somebody to go and find,
+    /// until they say they are back or answer something. Set by them or
+    /// by the host, never guessed from their phone's connection: phones
+    /// sleep in pockets during a conversation.
+    #[serde(default)]
+    pub away: bool,
 }
 
 /// The sheet of somebody the lobby has and the game has no sheet for,
@@ -201,12 +208,15 @@ static BLANK: Sheet = Sheet {
     marked: BTreeSet::new(),
     skipped: BTreeSet::new(),
     picks: BTreeSet::new(),
+    away: false,
 };
 
 /// Somebody in the room as the game sees them: their key and name, from
 /// the lobby, and their sheet.
 #[derive(Clone, Copy)]
 pub struct Player<'a> {
+    /// What the host's screen knows them by.
+    pub id: u32,
     pub key: &'a str,
     pub name: &'a str,
     pub sheet: &'a Sheet,
@@ -596,6 +606,7 @@ impl Game {
     /// Everybody in the room, in the order they joined.
     pub fn players(&self) -> impl Iterator<Item = Player<'_>> {
         self.lobby.players.iter().map(|p| Player {
+            id: p.id,
             key: &p.key,
             name: &p.name,
             sheet: self.sheets.get(&p.key).unwrap_or(&BLANK),
@@ -605,6 +616,7 @@ impl Game {
     pub fn player(&self, key: &str) -> Option<Player<'_>> {
         let p = self.lobby.player(key)?;
         Some(Player {
+            id: p.id,
             key: &p.key,
             name: &p.name,
             sheet: self.sheets.get(key).unwrap_or(&BLANK),
@@ -789,6 +801,7 @@ impl Game {
                     return Err("That answer is off the scale.");
                 }
                 player.answers.insert(id, v);
+                player.away = false;
                 player.skipped.remove(&id);
                 player.first.entry(id).or_insert(v);
             }
@@ -810,6 +823,23 @@ impl Game {
             };
         }
         Ok(())
+    }
+
+    /// Says that somebody is sitting the next rounds out, or is back.
+    pub fn set_away(&mut self, key: &str, away: bool) -> Result<(), &'static str> {
+        self.player_mut(key)?.away = away;
+        Ok(())
+    }
+
+    /// The same, by the host, for the person with this id.
+    pub fn set_away_by_id(&mut self, id: u32, away: bool) -> Result<(), &'static str> {
+        let key = self
+            .lobby
+            .by_id(id)
+            .ok_or("That person is not in the room any more.")?
+            .key
+            .clone();
+        self.set_away(&key, away)
     }
 
     /// Passes on a statement in the quick-fire feed.
@@ -1366,7 +1396,10 @@ impl Game {
 /// possible matching, but it gives the most opposed pairs the evening's
 /// best conversations, which is the point.
 fn pair(game: &Game, met: &HashSet<(String, String)>) -> (Vec<Group>, Vec<String>) {
-    let people: Vec<Player> = game.players().filter(|p| !p.answers.is_empty()).collect();
+    let people: Vec<Player> = game
+        .players()
+        .filter(|p| !p.answers.is_empty() && !p.away)
+        .collect();
     let mut candidates: Vec<(i32, usize, usize, u32)> = Vec::new();
     for i in 0..people.len() {
         for j in i + 1..people.len() {

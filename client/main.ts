@@ -145,7 +145,11 @@ interface WarmMine {
 }
 
 interface Who {
+  /** What the Away button sends. */
+  id: number;
   name: string;
+  /** Sitting rounds out: not paired until they are back. */
+  away: boolean;
   score: Score;
   answered: number;
   of: number;
@@ -255,6 +259,8 @@ interface Opposite {
 
 interface PlayerView {
   name: string;
+  /** Sitting rounds out: not paired until back, or until they answer. */
+  away: boolean;
   mode: Mode;
   side: number;
   phase: Phase;
@@ -824,6 +830,28 @@ function host(key: string): void {
 
   const round1 = (v: number): string => String(Math.round(v));
 
+  /** Marks somebody away, so they are not paired, or back. For people
+   *  who left without saying; their phone can say it itself. */
+  const awayButton = (p: Who): HTMLElement => {
+    const b = el(
+      "button",
+      { type: "button", className: `chip small${p.away ? " on" : ""}` },
+      p.away ? "Away" : "In",
+    );
+    b.setAttribute("aria-pressed", String(p.away));
+    b.setAttribute("aria-label", p.away ? `${p.name} is away. Bring them back` : `Mark ${p.name} away`);
+    b.title = p.away ? "Not paired. Tap when they are back." : "Tap if they have left, so they are not paired.";
+    b.addEventListener("click", () => {
+      b.disabled = true;
+      send("PUT", "/away", { id: p.id, away: !p.away })
+        .catch(failed)
+        .finally(() => {
+          b.disabled = false;
+        });
+    });
+    return b;
+  };
+
   const drawBoard = (view: HostView): void => {
     const people = el(
       "section",
@@ -851,6 +879,7 @@ function host(key: string): void {
               el("th", {}, "Updated"),
               el("th", {}, "Points"),
               view.mode === "bingo" ? el("th", {}, "Lines") : null,
+              el("th", {}, "Paired"),
             ),
           ),
           el(
@@ -865,6 +894,7 @@ function host(key: string): void {
                 el("td", {}, String(p.updated)),
                 el("td", {}, String(p.score.total)),
                 view.mode === "bingo" ? el("td", {}, p.lines ? `${p.lines} 🎉` : "0") : null,
+                el("td", {}, awayButton(p)),
               ),
             ),
           ),
@@ -1682,11 +1712,13 @@ function player(key: string): void {
     if (view.waiting) {
       box.replaceChildren(
         el("p", { className: "eyebrow" }, `Round ${view.round}`),
-        el("h2", {}, "You were not paired this round"),
+        el("h2", {}, view.away ? "You are sitting this round out" : "You were not paired this round"),
         el(
           "p",
           { className: "note" },
-          "Nobody was left, or nobody had answered the same statements as you. Answer some more, or go and find somebody below.",
+          view.away
+            ? "Press I'm back above when you want to be paired again."
+            : "Nobody was left, or nobody had answered the same statements as you. Answer some more, or go and find somebody below.",
         ),
       );
       return;
@@ -1776,9 +1808,24 @@ function player(key: string): void {
     );
   };
 
+  /** Sitting the next rounds out, or back. Not while a round is being
+   *  talked, when it would only take effect at the next one anyway. */
+  const drawAway = (view: PlayerView): void => {
+    hide("away-bar", view.phase === "finished" || (view.phase === "talking" && !view.away));
+    byId("away-bar").classList.toggle("on", view.away);
+    text(
+      "away-note",
+      view.away
+        ? "You are sitting rounds out, and are not paired. Answering a statement brings you back too."
+        : "Leaving, or need a break? Say so, and nobody waits for you at a meeting spot.",
+    );
+    text("away", view.away ? "I'm back" : "Sit the next round out");
+  };
+
   const draw = (view: PlayerView): void => {
     current = view;
     text("you", `You are ${view.name} · ${plural(view.players, "person", "people")} in the room`);
+    drawAway(view);
     text("where", view.round ? `Round ${view.round}` : "");
     const picking = view.phase === "picking";
     const shape = `${view.mode}:${picking}:${view.squares.map((s) => s.statement.id).join(",")}`;
@@ -1838,6 +1885,7 @@ function player(key: string): void {
       view.round,
       view.group,
       view.waiting,
+      view.away,
       view.updated,
       view.moved,
       view.mode,
@@ -1862,6 +1910,9 @@ function player(key: string): void {
   let drawnNow = "";
 
   suggestions("suggest-form", "idea", "idea-chance", "idea-done");
+  onClick("away", async () => {
+    if (current) accept(await api("PUT", at("/away"), { away: !current.away }));
+  });
 
   const feed = watch<PlayerView>(at(""), draw);
   showConnection(feed);

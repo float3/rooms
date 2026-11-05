@@ -599,3 +599,29 @@ body.wall-screen main {
 .wall-game .wall-board li {
   font-size: clamp(1.2rem, 2vw, 1.8rem);
 }
+
+/* Sitting rounds out, on the phone. Loud while it is on, so nobody
+ * forgets they said it. */
+.away-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+.away-bar .note {
+  margin: 0;
+  flex: 1 1 14rem;
+}
+
+.away-bar.on {
+  padding: 10px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+}
+
+.away-bar.on .note {
+  color: inherit;
+}

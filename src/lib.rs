@@ -130,6 +130,18 @@ struct Pick {
 }
 
 #[derive(Deserialize)]
+struct Away {
+    away: bool,
+}
+
+/// The host marking somebody away, by the id the host's screen has.
+#[derive(Deserialize)]
+struct AwayById {
+    id: u32,
+    away: bool,
+}
+
+#[derive(Deserialize)]
 struct Skip {
     id: u32,
 }
@@ -268,6 +280,18 @@ async fn pick(State(app): State<App>, Path(key): Path<String>, Json(p): Json<Pic
     act_as(&app, &key, |game, key, _| game.pick(key, p.id, p.picked)).await
 }
 
+async fn away(State(app): State<App>, Path(key): Path<String>, Json(a): Json<Away>) -> Response {
+    act_as(&app, &key, |game, key, _| game.set_away(key, a.away)).await
+}
+
+async fn host_away(
+    State(app): State<App>,
+    Path(key): Path<String>,
+    Json(a): Json<AwayById>,
+) -> Response {
+    act(&app, &key, |game, _| game.set_away_by_id(a.id, a.away)).await
+}
+
 async fn skip(State(app): State<App>, Path(key): Path<String>, Json(s): Json<Skip>) -> Response {
     act_as(&app, &key, |game, key, _| game.skip(key, s.id)).await
 }
@@ -328,6 +352,7 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
         .route("/api/h/{key}/extend", post(extend))
         .route("/api/h/{key}/finish", post(finish))
         .route("/api/h/{key}/reopen", post(reopen))
+        .route("/api/h/{key}/away", put(host_away))
         .route("/api/h/{key}/picks/close", post(close_picks))
         .route("/api/h/{key}/warmup", post(warmup))
         .route("/api/h/{key}/warmup/next", post(warmup_next))
@@ -338,6 +363,7 @@ pub fn router_under(rooms: Arc<Rooms<Game>>, suggestions: PathBuf, base: &str) -
         .route("/api/p/{key}/mark", put(mark))
         .route("/api/p/{key}/pick", put(pick))
         .route("/api/p/{key}/skip", put(skip))
+        .route("/api/p/{key}/away", put(away))
         .route("/api/p/{key}/guess", put(guess))
         .route("/api/p/{key}/kudos", put(kudos))
         .route("/api/p/{key}/warm", put(warm))
@@ -1024,6 +1050,88 @@ mod tests {
         let (status, body) = join(&t.app, &code, json!({"name": "Bo"})).await;
         assert_eq!(status, StatusCode::OK, "the name is free again");
         assert_ne!(body["player"], bo.as_str(), "under a new key");
+    }
+
+    #[tokio::test]
+    async fn somebody_away_is_not_paired_until_they_are_back() {
+        let t = test("away");
+        let (host, ada, bo) = ready(&t.app).await;
+        let code = join_key(&t.app, &host).await;
+        let (_, body) = join(&t.app, &code, json!({"name": "Cy"})).await;
+        let cy = body["player"].as_str().unwrap().to_string();
+        answer(&t.app, &ada, 0, 90).await;
+        answer(&t.app, &bo, 0, 10).await;
+        answer(&t.app, &cy, 0, 30).await;
+
+        // Bo says so on the phone, and is not suggested to Ada either.
+        let view = ok(
+            &t.app,
+            "PUT",
+            &format!("/api/p/{bo}/away"),
+            Some(json!({"away": true})),
+        )
+        .await["view"]
+            .clone();
+        assert_eq!(view["away"], true);
+        let mine = ok(&t.app, "GET", &format!("/api/p/{ada}"), None).await["view"].clone();
+        assert!(!mine["opposites"].to_string().contains("\"Bo\""));
+        let host_view = ok(&t.app, "GET", &format!("/api/h/{host}"), None).await["view"].clone();
+        assert_eq!(host_view["players"][1]["away"], true);
+
+        let view = ok(&t.app, "POST", &format!("/api/h/{host}/round"), None).await["view"].clone();
+        let groups = view["round"]["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert!(
+            !view["round"].to_string().contains("\"Bo\""),
+            "Bo sits it out"
+        );
+        let bo_view = ok(&t.app, "GET", &format!("/api/p/{bo}"), None).await["view"].clone();
+        assert!(bo_view["group"].is_null());
+        ok(&t.app, "POST", &format!("/api/h/{host}/stop"), None).await;
+
+        // Answering brings Bo back.
+        let bo_view = answer(&t.app, &bo, 1, 50).await["view"].clone();
+        assert_eq!(bo_view["away"], false);
+
+        // The host marks Cy away by the id on the host's screen, and a
+        // player's key cannot.
+        let id = id_of(&t.app, &host, "Cy").await;
+        let (status, _) = call(
+            &t.app,
+            "PUT",
+            &format!("/api/h/{ada}/away"),
+            Some(json!({"id": id, "away": true})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let view = ok(
+            &t.app,
+            "PUT",
+            &format!("/api/h/{host}/away"),
+            Some(json!({"id": id, "away": true})),
+        )
+        .await["view"]
+            .clone();
+        assert_eq!(view["players"][2]["away"], true);
+        let cy_view = ok(&t.app, "GET", &format!("/api/p/{cy}"), None).await["view"].clone();
+        assert_eq!(cy_view["away"], true, "and Cy's phone says so");
+        let view = ok(&t.app, "POST", &format!("/api/h/{host}/round"), None).await["view"].clone();
+        assert!(
+            !view["round"].to_string().contains("\"Cy\""),
+            "Cy sits it out"
+        );
+        ok(&t.app, "POST", &format!("/api/h/{host}/stop"), None).await;
+
+        // Back by the host, or by pressing it again.
+        ok(
+            &t.app,
+            "PUT",
+            &format!("/api/h/{host}/away"),
+            Some(json!({"id": id, "away": false})),
+        )
+        .await;
+        let cy_view = ok(&t.app, "GET", &format!("/api/p/{cy}"), None).await["view"].clone();
+        assert_eq!(cy_view["away"], false);
     }
 
     #[tokio::test]

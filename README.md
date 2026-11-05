@@ -82,6 +82,14 @@ swap is made. with an odd number, the one left over joins the pair whose
 statement they are furthest from, as a three. people who have answered
 nothing anybody else has answered are told they were not paired, and why.
 
+somebody away is not paired, and not suggested to anybody to go and find.
+a phone says so with "sit the next round out", and is back with "I'm
+back" or by answering anything. the host can mark somebody away in the
+people table, for whoever left without saying. nobody is marked away
+because their phone dropped its connection: phones sleep in pockets in
+the middle of a conversation. somebody who has left for good the host
+can also remove.
+
 both scales are compared on one from 0 to 200: from 0% to 100% is as far
 apart as from 1 to 7. one step of agreement is 33 points, one percentage
 point is 2. an answer that moves 20 points, one step or ten percentage

@@ -59,7 +59,10 @@ pub struct RoundView<'a> {
 
 #[derive(Serialize)]
 pub struct Who {
+    /// What the host's Away button sends.
+    id: u32,
     name: String,
+    away: bool,
     answered: usize,
     of: usize,
     /// How many answers moved by at least `UPDATE` since they were given.
@@ -492,7 +495,9 @@ pub fn host(game: &Game, now: u64) -> HostView<'_> {
         .map(|p| {
             let (updated, moved) = moved(game, p);
             Who {
+                id: p.id,
                 name: p.name.to_string(),
+                away: p.away,
                 answered: p.answers.len(),
                 of: game.hand(p).len(),
                 updated,
@@ -629,6 +634,8 @@ pub struct PlayerView<'a> {
     topics: Vec<(&'static str, &'static str)>,
     group: Option<Mine<'a>>,
     waiting: bool,
+    /// Sitting rounds out: see [`crate::game::Sheet::away`].
+    away: bool,
     opposites: Vec<Opposite<'a>>,
     lines: usize,
     updated: usize,
@@ -779,7 +786,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
     } else {
         let mut found: Vec<Opposite> = game
             .players()
-            .filter(|p| p.key != key)
+            .filter(|p| p.key != key && !p.away)
             .filter_map(|p| {
                 let (id, gap) = game.best_between(me, p)?;
                 Some(Opposite {
@@ -827,6 +834,7 @@ pub fn player<'a>(game: &'a Game, key: &str) -> Option<PlayerView<'a>> {
             .collect(),
         group,
         waiting,
+        away: me.away,
         opposites,
         lines: game.lines(me),
         updated,
