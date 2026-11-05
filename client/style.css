@@ -625,3 +625,13 @@ body.wall-screen main {
 .away-bar.on .note {
   color: inherit;
 }
+
+/* How the evening works, on a phone before the first round. */
+.explainer ol {
+  margin: 8px 0;
+  padding-left: 1.4em;
+}
+
+.explainer li + li {
+  margin-top: 4px;
+}

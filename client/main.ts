@@ -26,9 +26,11 @@ import {
   plural,
   roster,
   route,
+  persist,
   sentBox,
   shareLink,
   show,
+  stored,
   showConnection,
   text,
   wall,
@@ -37,6 +39,10 @@ import {
 } from "./rooms";
 
 type Mode = "bingo" | "open" | "free" | "pick";
+
+/** Set once a phone has dismissed how the evening works. Kept in the
+ *  browser: it only saves somebody reading it twice. */
+const EXPLAINED = "updating:explained";
 type Scale = "written" | "agree" | "chance";
 type Phase = "picking" | "answering" | "warmup" | "talking" | "updating" | "finished";
 type Stage = "before" | "clue" | "revealed";
@@ -1826,6 +1832,8 @@ function player(key: string): void {
     current = view;
     text("you", `You are ${view.name} · ${plural(view.players, "person", "people")} in the room`);
     drawAway(view);
+    // How the evening works, once per phone, until the first round.
+    hide("explainer", explained || view.round > 0 || view.phase === "finished");
     text("where", view.round ? `Round ${view.round}` : "");
     const picking = view.phase === "picking";
     const shape = `${view.mode}:${picking}:${view.squares.map((s) => s.statement.id).join(",")}`;
@@ -1912,6 +1920,13 @@ function player(key: string): void {
   suggestions("suggest-form", "idea", "idea-chance", "idea-done");
   onClick("away", async () => {
     if (current) accept(await api("PUT", at("/away"), { away: !current.away }));
+  });
+
+  let explained = stored(EXPLAINED, false);
+  byId("explained").addEventListener("click", () => {
+    explained = true;
+    persist(EXPLAINED, true);
+    hide("explainer", true);
   });
 
   const feed = watch<PlayerView>(at(""), draw);
