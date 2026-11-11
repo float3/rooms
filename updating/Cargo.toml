@@ -1,0 +1,20 @@
+[package]
+name = "updating"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Speed updating for a room of people: say where you stand, then talk to whoever disagrees with you most."
+
+[build-dependencies]
+rooms-client = { git = "https://github.com/float3/rooms" }
+
+[dependencies]
+axum = "0.8"
+rooms = { git = "https://github.com/float3/rooms" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

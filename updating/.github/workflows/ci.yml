@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  # Pushes to the default branch, and every pull request. Pushes to other
+  # branches are left to their pull request: checking both ran every job
+  # twice on the same commit.
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Test
+        run: nix develop --command cargo test
+
+      - name: Lint
+        run: nix develop --command cargo clippy --all-targets -- -D warnings
+
+      - name: Check the formatting
+        run: nix develop --command cargo fmt --check
+
+      - name: Build the package
+        run: nix build --print-build-logs
+
+      - name: Evaluate the NixOS module
+        run: |
+          nix eval --impure --raw --expr '
+            let
+              flake = builtins.getFlake "git+file://'"$PWD"'";
+              system = flake.inputs.nixpkgs.lib.nixosSystem {
+                system = "x86_64-linux";
+                modules = [
+                  flake.nixosModules.default
+                  {
+                    boot.isContainer = true;
+                    system.stateVersion = "26.05";
+                    services.nginx.enable = true;
+                    security.acme.acceptTerms = true;
+                    security.acme.defaults.email = "ci@example.com";
+                    services.updating = {
+                      enable = true;
+                      domains = ["updating.example.com"];
+                    };
+                  }
+                ];
+              };
+            in system.config.system.build.toplevel.drvPath'

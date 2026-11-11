@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Two marks on a scale moving towards each other">
+  <rect width="64" height="64" rx="12" fill="#183c32"/>
+  <path d="M12 40h40" stroke="#f8f7f2" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="20" cy="40" r="6" fill="#dcb96c"/>
+  <circle cx="44" cy="40" r="6" fill="#f8f7f2"/>
+  <path d="M26 24c4-6 8-6 12 0" stroke="#dcb96c" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M38 24l-1-6M38 24l-6 1" stroke="#dcb96c" stroke-width="4" fill="none" stroke-linecap="round"/>
+</svg>

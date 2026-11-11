@@ -1,0 +1,5 @@
+/target
+/result
+rooms.json
+rooms.tmp
+suggestions.jsonl
