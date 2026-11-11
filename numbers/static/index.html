@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f8f7f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121512" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex">
+<title>Number games</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main>
+  <header class="bar">
+    <a class="brand" href="/"><img src="/icon.svg" alt="" width="26" height="26">Number games</a>
+    <span class="note" id="where"></span>
+  </header>
+
+  <p class="error" id="error" hidden></p>
+
+  <section id="screen-start" hidden>
+    <p class="eyebrow">For a room of people</p>
+    <h1>Everyone picks a number</h1>
+    <p class="lead">You pick a rule and a range. Everyone picks a number on
+      their phone. The rule decides who wins.</p>
+    <div class="actions"><button class="button primary" id="open">Open a room</button></div>
+    <div class="prose">
+      <h2>The rules</h2>
+      <ul>
+        <li>Closest to a fraction of the average: a third, a half, two thirds,
+          or the average itself.</li>
+        <li>Closest to the same fraction of the middle number.</li>
+        <li>The lowest number nobody else picked. Whole numbers, and some
+          rounds have no winner.</li>
+        <li>The highest number nobody else picked.</li>
+        <li>The highest number below the average.</li>
+        <li>The number the most people picked. Nobody wins if no two people
+          pick the same number.</li>
+        <li>The number furthest from everybody else's, measured to the
+          nearest other pick.</li>
+        <li>The highest number, if everybody's numbers together come to no
+          more than a limit you set. Over the limit, nobody wins.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="screen-host" hidden>
+    <div class="panel" id="room">
+      <h2>The room</h2>
+      <p class="note">Everybody opens this:</p>
+      <div id="share"></div>
+      <details id="in-room" open>
+        <summary class="eyebrow" id="who">Nobody has joined yet</summary>
+        <ul id="people"></ul>
+      </details>
+      <div id="wall-button"></div>
+    </div>
+
+    <section class="panel" id="playing" hidden>
+      <p class="eyebrow" id="h-state"></p>
+      <h2 id="h-rule"></h2>
+      <p class="note" id="h-range"></p>
+      <p class="note" id="progress"></p>
+      <div class="actions">
+        <button class="button" id="close"></button>
+        <button class="button primary" id="reveal">Reveal</button>
+        <button class="button primary" id="again" hidden>Same rule again</button>
+      </div>
+      <div id="outcome"></div>
+    </section>
+
+    <details class="panel" id="next" open>
+      <summary><h2 id="next-title">Start a round</h2></summary>
+    <form id="start-form">
+      <label for="rule">The rule</label>
+      <select id="rule"></select>
+      <div class="two">
+        <div><label for="low">From</label><input id="low" type="number" step="any" inputmode="decimal" value="0"></div>
+        <div><label for="high">To</label><input id="high" type="number" step="any" inputmode="decimal" value="10"></div>
+      </div>
+      <label for="answers">Answers</label>
+      <select id="answers">
+        <option value="whole">Whole numbers</option>
+        <option value="decimal">Decimals, like 2.5</option>
+        <option value="expression">Expressions, like 1,001/3 or 2^10</option>
+      </select>
+      <p class="note" id="answers-note"></p>
+      <div id="limit-field" hidden>
+        <label for="limit">The limit for the room's total</label>
+        <input id="limit" type="number" step="any" inputmode="decimal" value="100">
+      </div>
+      <div class="actions"><button class="button primary" type="submit" id="start">Start the round</button></div>
+    </form>
+    </details>
+
+    <section id="board"></section>
+    <section id="history"></section>
+  </section>
+
+  <section id="screen-join" hidden>
+    <p class="eyebrow">You have been asked to pick a number</p>
+    <h1>Join the room</h1>
+    <form class="panel" id="name-form">
+      <label for="name">Your name</label>
+      <input id="name" maxlength="32" required autocomplete="nickname" autocapitalize="words">
+      <p class="note">Everyone sees this next to your number once the round
+        is revealed.</p>
+      <div class="actions"><button class="button primary" type="submit">Join</button></div>
+    </form>
+    <p class="note" id="join-count"></p>
+  </section>
+
+  <section id="screen-player" hidden>
+    <p class="note" id="you"></p>
+    <section class="panel">
+      <p class="eyebrow" id="p-state">Waiting</p>
+      <h1 id="p-rule">Waiting for the first round</h1>
+      <p class="note" id="p-range"></p>
+      <div class="sent-state" id="status" aria-live="polite" hidden></div>
+      <form id="pick-form" hidden>
+        <label for="pick" id="pick-label">Your number</label>
+        <input id="pick" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" maxlength="80">
+        <p class="reading" id="reading" aria-live="polite"></p>
+        <div class="actions send"><button class="button primary" type="submit" id="send">Send</button></div>
+      </form>
+      <p class="note" id="mine"></p>
+    </section>
+    <div id="p-outcome"></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

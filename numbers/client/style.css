@@ -1,0 +1,424 @@
+/* The rules specific to the number games. The rest is rooms.css. */
+
+#in-room {
+  margin-top: 16px;
+}
+
+#who {
+  cursor: pointer;
+  margin: 0;
+}
+
+/* Folded, a round being played is one tap from Reveal. */
+#next > summary,
+#who {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+/* The form for the next round, folded under the round being played. */
+#next > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+#next > summary::-webkit-details-marker {
+  display: none;
+}
+
+#next > summary h2 {
+  margin: 0;
+}
+
+#next > summary::after,
+#who::after {
+  content: "▸";
+  margin-left: 0.4em;
+  color: var(--body);
+}
+
+#next[open] > summary::after,
+#in-room[open] > #who::after {
+  content: "▾";
+}
+
+#who {
+  list-style: none;
+}
+
+#who::-webkit-details-marker {
+  display: none;
+}
+
+#next[open] > summary {
+  margin-bottom: 12px;
+}
+
+/* Every number along the range, with the target marked. The spread of a
+ * round is quicker to read here than in the table below it. */
+.strip {
+  position: relative;
+  height: 54px;
+  margin-top: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.strip .pick {
+  position: absolute;
+  bottom: -5px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--body);
+  transform: translateX(-50%);
+}
+
+.strip .pick.winner {
+  background: var(--gold);
+  width: 15px;
+  height: 15px;
+  bottom: -7px;
+  border: 1px solid var(--ink);
+}
+
+.strip .target {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--mark);
+  transform: translateX(-50%);
+}
+
+.strip .target span {
+  position: absolute;
+  top: -2px;
+  left: 6px;
+  font-size: 0.72rem;
+  color: var(--mark);
+  white-space: nowrap;
+}
+
+.ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--body);
+  margin-top: 6px;
+}
+
+h3 {
+  margin-top: 24px;
+}
+
+#outcome:not(:empty) {
+  margin-top: 20px;
+}
+
+/* On a phone the tables are squeezed to fit rather than scrolled
+ * sideways: headings wrap, and the cells give up some padding. */
+@media (max-width: 559px) {
+  table {
+    font-size: 0.85rem;
+  }
+
+  th,
+  td {
+    padding: 8px 4px;
+  }
+
+  thead th {
+    white-space: normal;
+    letter-spacing: 0.02em;
+    font-size: 0.65rem;
+    vertical-align: bottom;
+  }
+
+  td:first-child {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Who won, or why nobody did, as the first thing the reveal says. */
+.verdict {
+  margin-top: 4px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--tint);
+  border-left: 5px solid var(--mark);
+}
+
+.verdict.won {
+  background: color-mix(in srgb, var(--gold) 22%, var(--card));
+  border-left-color: var(--gold);
+}
+
+.verdict .eyebrow {
+  margin: 0 0 2px;
+}
+
+.verdict .big {
+  margin: 0;
+}
+
+.verdict.none .big {
+  font-size: 1.15rem;
+  line-height: 1.35;
+}
+
+.you-result {
+  margin: 0 0 12px;
+  font-weight: 700;
+}
+
+/* A number several people picked shows how many, and the winning
+ * number is labelled with who picked it. */
+.strip .pick {
+  display: grid;
+  place-items: center;
+}
+
+.strip .pick i {
+  position: absolute;
+  bottom: 13px;
+  font-style: normal;
+  font-size: 0.68rem;
+  color: var(--body);
+}
+
+.strip .pick.winner {
+  z-index: 1;
+}
+
+.strip .pick.winner span {
+  position: absolute;
+  top: 18px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.strip .pick.winner i {
+  bottom: 17px;
+}
+
+.strip + .ends {
+  margin-top: 26px;
+}
+
+tr.good td {
+  font-weight: 700;
+}
+
+.reading {
+  min-height: 1.3em;
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  color: var(--body);
+  font-variant-numeric: tabular-nums;
+}
+
+.reading.bad {
+  color: var(--bad);
+}
+
+/* ------------------------------------------------------------ the wall
+ * Read from across a room: the rule in large type, the count, and after
+ * the reveal the numbers as unnamed dots. */
+
+.nw-state {
+  margin: 0;
+}
+
+.nw-rule {
+  font-size: clamp(1.8rem, min(4.6vw, 8vh), 4.2rem);
+  font-weight: 800;
+  line-height: 1.1;
+  margin: 4px 0 8px;
+  color: var(--ink);
+}
+
+.nw-range {
+  font-size: clamp(1.1rem, min(2.2vw, 4vh), 2rem);
+  color: var(--body);
+  margin: 0 0 12px;
+}
+
+.nw-count {
+  font-size: clamp(1.6rem, min(3.6vw, 6.4vh), 3.4rem);
+  margin: 0;
+}
+
+.nw-count b {
+  font-size: 1.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+.nw-connected {
+  font-size: clamp(0.9rem, 1.4vw, 1.2rem);
+}
+
+.nw-shown .verdict {
+  font-size: clamp(1.2rem, min(2.6vw, 4.6vh), 2.4rem);
+  margin: 4px 0 0;
+  padding: 8px 14px;
+}
+
+/* In a row, so a 16:9 screen shows them without scrolling. */
+.nw-shown .facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 32px;
+  margin-top: 10px;
+}
+
+.nw-shown .fact {
+  display: grid;
+  gap: 0;
+  padding: 4px 0;
+  border: 0;
+}
+
+.nw-shown .fact > span:first-child {
+  font-size: clamp(0.8rem, min(1.2vw, 2.2vh), 1.1rem);
+}
+
+.nw-shown .fact b {
+  text-align: left;
+  font-size: clamp(1.3rem, min(2.6vw, 4.6vh), 2.2rem);
+}
+
+.wall-strip {
+  position: relative;
+  height: 2.4em;
+  margin-top: 2em;
+  border-bottom: 2px solid var(--border);
+}
+
+.wall-strip .spot {
+  position: absolute;
+  bottom: calc(var(--size) / -2);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  background: var(--body);
+  opacity: 0.85;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+}
+
+.wall-strip .spot.winner {
+  background: var(--gold);
+  border: 2px solid var(--ink);
+  opacity: 1;
+  z-index: 1;
+}
+
+.wall-strip .spot i {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  font-style: normal;
+  font-size: 0.6em;
+  color: var(--body);
+}
+
+.wall-strip .spot span {
+  position: absolute;
+  top: calc(100% + 4px);
+  font-size: 0.7em;
+  font-weight: 800;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.wall-strip .target {
+  position: absolute;
+  top: -1.6em;
+  bottom: 0;
+  width: 3px;
+  background: var(--mark);
+  transform: translateX(-50%);
+}
+
+.wall-strip .target span {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  font-size: 0.6em;
+  color: var(--mark);
+  white-space: nowrap;
+}
+
+.wall-strip + .ends {
+  margin-top: 1.6em;
+  font-size: 0.6em;
+}
+
+.nw-top-title {
+  margin-top: 14px;
+}
+
+.nw-top {
+  margin: 2px 0 0;
+  padding-left: 1.4em;
+  font-size: clamp(1.1rem, min(2.2vw, 4vh), 2.2rem);
+}
+
+.nw-top li {
+  padding: 2px 0;
+}
+
+.nw-top .who {
+  font-weight: 700;
+}
+
+.nw-top .wins {
+  color: var(--body);
+  margin-left: 0.6em;
+}
+
+/* Wins that were not shared: they rank equal wins, so say them, quietly. */
+.alone {
+  font-size: 0.75em;
+  opacity: 0.7;
+}
+
+/* Once a round is out, the result is the thing to read: the rule gives
+ * it room, and the board sits beside the numbers on a wide screen. */
+.nw-revealed .nw-rule {
+  font-size: clamp(1.4rem, min(3vw, 5.4vh), 2.8rem);
+}
+
+.nw-revealed .nw-range {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .nw-revealed {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 32px;
+  }
+
+  .nw-revealed > :not(.nw-board) {
+    grid-column: 1;
+  }
+
+  .nw-revealed > .nw-board {
+    grid-column: 2;
+    grid-row: 1 / span 4;
+    align-self: start;
+  }
+}
+
+/* Rounds of the same rule in a row: the line under the newest of them
+ * says how the target moved. */
+.past .trail {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}

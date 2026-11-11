@@ -1,0 +1,255 @@
+/* The rules specific to the estimation game. The rest is rooms.css. */
+
+/* The two bounds stay side by side even on the narrowest phone. They are
+ * one answer, and splitting them over two rows reads worse than setting
+ * them small. */
+.bounds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.bounds label {
+  margin-top: 10px;
+}
+
+details {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding-block: 10px;
+  font-size: 0.9rem;
+  color: var(--body);
+}
+
+h3 {
+  margin-top: 24px;
+}
+
+/* An earlier question: the question, what came of it, and a field for
+ * its answer, one under the other rather than squeezed side by side. */
+.past {
+  display: block;
+}
+
+.past p {
+  margin: 0 0 6px;
+}
+
+.past-answer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.past-answer input {
+  flex: 1;
+  min-width: 0;
+}
+
+.past-answer .button {
+  flex: none;
+  width: auto;
+  margin: 0;
+}
+
+/* The wall: the question and the counts before the reveal, and the
+ * ranges as unnamed bars after it, large enough for the back of a room. */
+.wall-question {
+  font: 400 clamp(1.6rem, 3.4vw, 3rem) / 1.2 Georgia, serif;
+  margin: 4px 0 8px;
+}
+
+.wall-unit,
+.wall-line {
+  margin: 4px 0;
+  color: var(--body);
+}
+
+.wall-line {
+  font-size: 0.8em;
+}
+
+.wall-count-big {
+  font: 400 clamp(2.4rem, 7vw, 5.5rem) / 1.1 Georgia, serif;
+  font-variant-numeric: tabular-nums;
+  margin: 12px 0 0;
+}
+
+.wall-answer-big {
+  font: 400 clamp(2rem, 4.6vw, 4rem) / 1.1 Georgia, serif;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0 0;
+}
+
+.wall-answer-big .eyebrow {
+  display: block;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.range-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 12px;
+}
+
+.wall-chart {
+  max-height: 32vh;
+}
+
+/* The reveal's picture on the host's screen and a phone. */
+.chart {
+  margin: 8px 0 0;
+}
+
+.chart figcaption {
+  margin-top: 4px;
+}
+
+.chart-bar.first {
+  fill: var(--body);
+  opacity: 0.25;
+}
+
+.chart-bar.mine {
+  stroke: var(--ink);
+  stroke-width: 3;
+}
+
+.chart-bar.hit {
+  fill: var(--mark);
+}
+
+.chart-bar.miss {
+  fill: var(--bad);
+  opacity: 0.75;
+}
+
+.chart-bar.open {
+  fill: var(--body);
+}
+
+.chart-axis {
+  stroke: var(--border);
+  stroke-width: 2;
+}
+
+.chart-answer {
+  stroke: var(--ink);
+  stroke-width: 4;
+}
+
+.chart-tick {
+  fill: var(--body);
+  font-size: 26px;
+}
+
+/* The top three, on one line under the bars. */
+.wall-top {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 24px;
+  counter-reset: place;
+}
+
+.wall-top li:not(.eyebrow) {
+  counter-increment: place;
+}
+
+.wall-top li:not(.eyebrow)::before {
+  content: counter(place) ". ";
+  color: var(--body);
+}
+
+/* The ask button asking "Tap again" (confirmTap). rooms.css sets
+ * `.primary` with the `background` shorthand, which drops the draining
+ * bar, and its dark fill hides the red text. */
+.button.primary.armed {
+  background-color: transparent;
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--bad) 20%, transparent),
+    color-mix(in srgb, var(--bad) 20%, transparent)
+  );
+  background-repeat: no-repeat;
+}
+
+/* The other levels while a question is open. */
+.chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The board's score and hit columns: the number, and under it what it is
+ * made of. */
+td.cost small {
+  display: block;
+  font-size: 0.8em;
+  color: var(--body);
+  white-space: nowrap;
+}
+
+/* The sentence a player's evening comes down to. */
+.calibration {
+  font-weight: 700;
+  margin: 4px 0;
+}
+
+/* A number field with its ± button, for the iPhone's keypad, which has
+ * no minus key. */
+.signed {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+}
+
+.signed input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sign {
+  flex: none;
+  width: 44px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--tint);
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.sign[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--on-ink);
+  border-color: var(--ink);
+}
+
+/* The pasted list of questions. */
+textarea {
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 1rem;
+  color: inherit;
+  resize: vertical;
+}
+
+#next-box {
+  margin-bottom: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}

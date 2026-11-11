@@ -1,2 +1,8 @@
 /target
 /result
+# What the servers save, wherever they were started from.
+games.json
+games.tmp
+rooms.json
+rooms.tmp
+suggestions.jsonl

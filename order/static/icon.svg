@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="A pizza with a slice taken out">
+  <rect width="64" height="64" rx="12" fill="#183c32"/>
+  <path d="M32 32 L52 22 A22 22 0 1 1 42 13 Z" fill="#dcb96c" stroke="#f8f7f2" stroke-width="3" stroke-linejoin="round"/>
+  <circle cx="22" cy="30" r="3.5" fill="#9a3b2f"/>
+  <circle cx="30" cy="44" r="3.5" fill="#9a3b2f"/>
+  <circle cx="41" cy="38" r="3" fill="#859264"/>
+</svg>

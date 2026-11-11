@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f8f7f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121512" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex">
+<title>Estimation game</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main>
+  <header class="bar">
+    <a class="brand" href="/"><img src="/icon.svg" alt="" width="26" height="26">Estimation game</a>
+    <span class="note" id="where"></span>
+  </header>
+
+  <p class="error" id="error" hidden></p>
+
+  <section id="screen-start" hidden>
+    <p class="eyebrow">For a room of people</p>
+    <h1>How wide is your range?</h1>
+    <p class="lead">You ask a question with a number for an answer. Everyone
+      sends a lower and an upper bound from their phone, the room discusses
+      it, and everyone answers again.</p>
+    <div class="actions"><button class="button primary" id="open">Open a room</button></div>
+    <div class="prose">
+      <h2>How it goes</h2>
+      <ol>
+        <li>Everyone scans the join link and gives a name.</li>
+        <li>You ask a question. Everyone sends the range they are ninety per
+          cent sure the answer falls in.</li>
+        <li>You stop taking ranges, and the room discusses it.</li>
+        <li>You ask again. Each phone starts from that player's first
+          answer.</li>
+        <li>You reveal: the answer, the room's numbers, and what changed
+          between the two passes.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="screen-host" hidden>
+    <div class="panel" id="room">
+      <h2>The room</h2>
+      <p class="note">Everybody opens this:</p>
+      <div id="join-share"></div>
+      <div id="wall-button"></div>
+      <details id="people-box">
+        <summary id="who">Nobody has joined yet</summary>
+        <ul id="people"></ul>
+      </details>
+      <fieldset>
+        <legend>How sure everybody is meant to be</legend>
+        <div class="chips" id="levels"></div>
+        <p class="note" id="levels-note">Use the same level all evening.</p>
+      </fieldset>
+    </div>
+
+    <form class="panel" id="ask-form">
+      <h2>Ask a question</h2>
+      <div id="next-box" hidden>
+        <p class="note" id="next-what"></p>
+        <div class="actions"><button class="button primary" id="ask-next" type="button">Ask next</button></div>
+      </div>
+      <label for="question">Question</label>
+      <input id="question" maxlength="300" required placeholder="How many lamp posts are there in Munich?">
+      <div class="two">
+        <div>
+          <label for="unit">Unit, if it helps</label>
+          <input id="unit" maxlength="24" placeholder="km, years, €">
+        </div>
+        <div>
+          <label for="answer">The answer, if you have it</label>
+          <div class="signed"><input id="answer" type="number" step="any" inputmode="decimal"><button type="button" class="sign" aria-label="Make it negative" aria-pressed="false">±</button></div>
+        </div>
+      </div>
+      <p class="note">The answer stays on this screen until you reveal it. You
+        can also look it up afterwards.</p>
+      <div class="actions"><button class="button primary" id="ask-button" type="submit">Ask the room</button></div>
+      <details id="queue-box">
+        <summary id="queue-summary">Line up a list of questions</summary>
+        <label for="queue-text">One per line: question | answer | unit</label>
+        <textarea id="queue-text" rows="6" spellcheck="false" placeholder="How tall is the Olympiaturm? | 291 | m&#10;How many people live in Munich? | 1,510,000"></textarea>
+        <p class="note">The answer and the unit can be left out. Nobody but
+          you sees the list. “Ask next” asks the first one and takes it
+          off.</p>
+        <div class="actions"><button class="button" id="queue-save" type="button">Save the list</button></div>
+      </details>
+    </form>
+
+    <section class="panel" id="asked" hidden>
+      <p class="eyebrow" id="h-state"></p>
+      <h2 id="h-question"></h2>
+      <p class="note" id="progress"></p>
+      <div class="actions">
+        <button class="button primary" id="to-discussion">Stop and talk it over</button>
+        <button class="button primary" id="to-second">Ask for a second range</button>
+        <button class="button" id="to-first">Back to the first ranges</button>
+        <button class="button" id="reveal">Reveal</button>
+      </div>
+      <form id="answer-form">
+        <label for="true-answer" id="answer-label">The answer</label>
+        <div class="signed"><input id="true-answer" type="number" step="any" inputmode="decimal"><button type="button" class="sign" aria-label="Make it negative" aria-pressed="false">±</button></div>
+        <div class="actions"><button class="button" type="submit">Save the answer</button></div>
+      </form>
+      <div id="numbers"></div>
+      <div id="ranges"></div>
+    </section>
+
+    <section id="board"></section>
+    <section id="history"></section>
+  </section>
+
+  <section id="screen-join" hidden>
+    <p class="eyebrow">You have been asked to estimate things</p>
+    <h1>Join the room</h1>
+    <form class="panel" id="name-form">
+      <label for="name">Your name</label>
+      <input id="name" maxlength="32" required autocomplete="nickname" autocapitalize="words">
+      <p class="note">The host sees this beside your ranges, and everybody in
+        the room sees it after each reveal.</p>
+      <div class="actions"><button class="button primary" type="submit">Join</button></div>
+    </form>
+    <p class="note" id="join-count"></p>
+  </section>
+
+  <section id="screen-player" hidden>
+    <p class="note" id="you"></p>
+    <section class="panel">
+      <p class="eyebrow" id="p-state">Waiting</p>
+      <h1 id="p-question">Waiting for the first question</h1>
+      <p class="note" id="p-unit"></p>
+      <p class="note" id="mine-before" hidden></p>
+      <div class="sent-state" id="status" aria-live="polite" hidden></div>
+      <form id="bounds-form" hidden>
+        <div class="bounds">
+          <div>
+            <label for="low">At least</label>
+            <div class="signed"><input id="low" type="number" step="any" inputmode="decimal" required><button type="button" class="sign" aria-label="Make it negative" aria-pressed="false">±</button></div>
+          </div>
+          <div>
+            <label for="high">At most</label>
+            <div class="signed"><input id="high" type="number" step="any" inputmode="decimal" required><button type="button" class="sign" aria-label="Make it negative" aria-pressed="false">±</button></div>
+          </div>
+        </div>
+        <p class="note" id="preview"></p>
+        <div class="actions send"><button class="button primary" id="send" type="submit">Send</button></div>
+      </form>
+      <p class="note" id="mine"></p>
+    </section>
+    <div id="p-result"></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

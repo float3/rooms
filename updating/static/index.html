@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f8f7f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121512" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex">
+<title>Speed updating</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main>
+  <header class="bar">
+    <a class="brand" href="/"><img src="/icon.svg" alt="" width="26" height="26">Speed updating</a>
+    <span class="note" id="where"></span>
+  </header>
+
+  <p class="error" id="error" hidden></p>
+
+  <section id="screen-start" hidden>
+    <p class="eyebrow">For a room of people</p>
+    <h1>Talk to whoever disagrees with you most</h1>
+    <p class="lead">Everyone says where they stand on statements about ethics,
+      minds, AI and the rest. Then the room pairs up with the people furthest
+      away from them, a few minutes at a time, and says where they stand
+      afterwards.</p>
+    <div class="actions"><button class="button primary" id="open">Open a room</button></div>
+    <div class="prose">
+      <h2>How it goes</h2>
+      <ol>
+        <li>Everyone scans the join link and gives a name.</li>
+        <li>Everyone answers statements: how confident they are that each
+          is true, from 0 to 100%, where 50% means no idea either way, or, if you prefer, how much they agree,
+          from 1 to 7. Either on a bingo card dealt to them, or as many as
+          they like.</li>
+        <li>You start a round. Everybody is paired with the person they
+          disagree with most, on the statement they are furthest apart on,
+          and the clock runs.</li>
+        <li>When it runs out, everybody says where they stand now. Then the
+          next round, with somebody new.</li>
+      </ol>
+      <p>Between rounds, each phone also shows the people who disagree with
+        it most, so people can go and find each other by themselves. On a
+        bingo card, every statement you talk about is marked; a full line is
+        a bingo.</p>
+      <p class="note">Speed updating is a format EA groups have run on paper.
+        Thanks to Noah Birnbaum for the idea.</p>
+    </div>
+    <form class="panel" id="suggest-start">
+      <h2>Suggest a statement</h2>
+      <p class="note">Something you would like to see people disagree about.
+        Suggestions are read by a person before anything is added.</p>
+      <label for="idea-start">Statement</label>
+      <input id="idea-start" maxlength="200" required placeholder="Octopuses are conscious.">
+      <label class="check"><input type="checkbox" id="idea-start-chance"> It asks for a probability</label>
+      <div class="actions"><button class="button" type="submit">Send the suggestion</button></div>
+      <p class="note" id="idea-start-done" hidden>Thank you, it has been kept.</p>
+    </form>
+  </section>
+
+  <section id="screen-host" hidden>
+    <!-- The facilitator's buttons, in one bar that stays at the top. -->
+    <div class="controls" id="rounds">
+      <span class="eyebrow" id="h-phase"></span>
+      <button class="button primary" id="close-picks">Close the picks</button>
+      <button class="button primary" id="start">Start a round</button>
+      <button class="button" id="stop">End the round now</button>
+      <button class="button" id="extend">One more minute</button>
+      <button class="button" id="warm-start">Warm-up question</button>
+      <button class="button primary" id="warm-next">Deal the clues</button>
+      <button class="button" id="warm-end">Back to the statements</button>
+      <button class="button" id="finish">End the evening</button>
+      <button class="button" id="reopen">Carry on after all</button>
+    </div>
+
+    <div class="stage">
+      <!-- What is going on, with names: for the facilitator. The room
+           looks at the wall view, which shows nobody's answers. -->
+      <section id="wall"></section>
+      <div class="panel" id="room">
+        <p class="eyebrow">Join on your phone</p>
+        <div id="join-share"></div>
+        <div id="wall-button"></div>
+        <p class="note" id="who"></p>
+        <ul id="people"></ul>
+      </div>
+    </div>
+
+    <details class="panel fold">
+      <summary>Room settings</summary>
+      <fieldset>
+        <legend>Minutes per round</legend>
+        <div class="chips" id="lengths"></div>
+      </fieldset>
+      <form id="setup">
+        <fieldset>
+          <legend>How people answer</legend>
+          <div class="chips" id="modes"></div>
+          <p class="note" id="mode-note"></p>
+        </fieldset>
+        <fieldset>
+          <legend>How statements are answered</legend>
+          <div class="chips" id="scales"></div>
+          <p class="note" id="scale-note"></p>
+        </fieldset>
+        <fieldset>
+          <legend>Topics</legend>
+          <div class="chips" id="topics"></div>
+        </fieldset>
+        <fieldset id="sides-set">
+          <legend>Card size</legend>
+          <div class="chips" id="sides"></div>
+        </fieldset>
+        <label for="custom">Your own statements, one per line</label>
+        <textarea id="custom" rows="4" placeholder="Munich needs more bike lanes.&#10;%What is the chance it snows on Christmas?"></textarea>
+        <p class="note">Start a line with % to ask for a probability instead of
+          agreement.</p>
+        <div class="actions"><button class="button primary" type="submit">Use these</button></div>
+        <p class="note" id="setup-note"></p>
+      </form>
+      <div id="locked" hidden>
+        <p class="note" id="locked-note"></p>
+      </div>
+    </details>
+
+    <details class="panel fold">
+      <summary>Points and statistics</summary>
+      <section id="board"></section>
+    </details>
+  </section>
+
+  <section id="screen-join" hidden>
+    <p class="eyebrow">You have been asked where you stand</p>
+    <h1>Join the room</h1>
+    <form class="panel" id="name-form">
+      <label for="name">Your name</label>
+      <input id="name" maxlength="32" required autocomplete="nickname" autocapitalize="words">
+      <p class="note">People are told to come and find you by this name, so
+        use the one you go by tonight.</p>
+      <div class="actions"><button class="button primary" type="submit">Join</button></div>
+    </form>
+    <p class="note" id="join-count"></p>
+  </section>
+
+  <section id="screen-player" hidden>
+    <p class="note" id="you"></p>
+    <div class="away-bar" id="away-bar" hidden>
+      <p class="note" id="away-note"></p>
+      <button class="button" type="button" id="away"></button>
+    </div>
+    <section class="panel explainer" id="explainer" hidden>
+      <h2>How it works</h2>
+      <ol>
+        <li>Say where you stand on a few statements.</li>
+        <li>When a round starts, go and talk to whoever disagrees with you most.</li>
+        <li>Afterwards, say where you stand now and guess where they landed.</li>
+      </ol>
+      <p class="note">You score for closing the gap together and for guessing well, not for winning the argument.</p>
+      <div class="actions"><button class="button" type="button" id="explained">Got it</button></div>
+    </section>
+    <section class="panel" id="now"></section>
+    <section class="panel" id="opposites" hidden></section>
+    <section class="panel" id="card-panel" hidden>
+      <h2>Your card</h2>
+      <p class="note" id="card-note"></p>
+      <div class="grid" id="grid"></div>
+    </section>
+    <section id="statements"></section>
+    <details class="panel" id="suggest-player">
+      <summary>Suggest a statement</summary>
+      <form id="suggest-form">
+        <label for="idea">Statement</label>
+        <input id="idea" maxlength="200" required>
+        <label class="check"><input type="checkbox" id="idea-chance"> It asks for a probability</label>
+        <div class="actions"><button class="button" type="submit">Send the suggestion</button></div>
+        <p class="note" id="idea-done" hidden>Thank you, it has been kept.</p>
+      </form>
+    </details>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

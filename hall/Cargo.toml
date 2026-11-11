@@ -15,10 +15,11 @@ rooms = { path = "../rooms" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
-petrov = { git = "https://github.com/float3/petrov" }
-numbers = { git = "https://github.com/float3/numbers" }
-estimate = { git = "https://github.com/float3/estimate" }
-updating = { git = "https://github.com/float3/updating" }
+petrov = { path = "../petrov" }
+numbers = { path = "../numbers" }
+estimate = { path = "../estimate" }
+updating = { path = "../updating" }
+order = { path = "../order" }
 
 [build-dependencies]
 rooms-client = { path = "../rooms-client" }

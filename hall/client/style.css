@@ -159,15 +159,25 @@ body.playing main {
     align-items: start;
   }
 
-  /* Two by two, so four games do not leave one on a row of its own. */
+  /* Two by two, and an odd one out across the whole row rather than
+   * alone in half of it. */
   .games:not(.compact) {
     grid-template-columns: repeat(2, 1fr);
   }
+
+  .games:not(.compact) .game:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
 }
 
+/* All of them in one row. */
 @media (min-width: 1100px) {
   .games:not(.compact) {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
+  }
+
+  .games:not(.compact) .game:last-child:nth-child(odd) {
+    grid-column: auto;
   }
 }
 

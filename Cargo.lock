@@ -166,14 +166,15 @@ dependencies = [
 [[package]]
 name = "estimate"
 version = "0.1.0"
-source = "git+https://github.com/float3/estimate#75b987e5f4ee4102431e3f1b932a1cce938802b7"
 dependencies = [
  "axum",
+ "http-body-util",
  "rooms",
  "rooms-client",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -359,14 +360,15 @@ dependencies = [
 [[package]]
 name = "numbers"
 version = "0.1.0"
-source = "git+https://github.com/float3/numbers#ef6412df0ced3f5294b8b71bd458dc4b808e082b"
 dependencies = [
  "axum",
+ "http-body-util",
  "rooms",
  "rooms-client",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -374,6 +376,20 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "order"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "rooms",
+ "rooms-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
 
 [[package]]
 name = "password-hash"
@@ -394,16 +410,17 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "petrov"
 version = "0.1.0"
-source = "git+https://github.com/float3/petrov#56f9c38c32097b2298cc5835740e970e59fb9a8d"
 dependencies = [
  "argon2",
  "axum",
+ "http-body-util",
  "rand",
  "rooms",
  "rooms-client",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -497,6 +514,7 @@ dependencies = [
  "estimate",
  "http-body-util",
  "numbers",
+ "order",
  "petrov",
  "rooms",
  "rooms-client",
@@ -717,14 +735,15 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 [[package]]
 name = "updating"
 version = "0.1.0"
-source = "git+https://github.com/float3/updating#562d787b05504f8f015b897bba8c8c2f0f6e1c2e"
 dependencies = [
  "axum",
+ "http-body-util",
  "rooms",
  "rooms-client",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]
