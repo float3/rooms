@@ -1,0 +1,176 @@
+/* The order's own rules. The rest is rooms.css. */
+
+textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 17px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  resize: vertical;
+}
+
+details > summary {
+  cursor: pointer;
+}
+
+details > summary h2 {
+  display: inline;
+}
+
+.menu-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 12px 0;
+}
+
+.menu-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.host-note {
+  white-space: pre-line;
+  padding: 10px 12px;
+  border-left: 3px solid var(--gold);
+  background: var(--tint-warm);
+  border-radius: 6px;
+}
+
+/* A list of items: what, what it costs, and a button to take it off. */
+.items {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+  display: grid;
+  gap: 6px;
+}
+
+.items li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 10px;
+  background: var(--tint);
+}
+
+.items .what {
+  flex: 1;
+}
+
+.items .price {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.button.strike {
+  width: auto;
+  flex: none;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 0 10px;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.items .button.strike.armed {
+  font-size: 0.9rem;
+}
+
+/* The order as the place needs it. */
+.tally-title {
+  margin-top: 18px;
+}
+
+.tally {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: grid;
+  gap: 4px;
+}
+
+.tally li {
+  display: grid;
+  grid-template-columns: 3.2em 1fr;
+  column-gap: 8px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tally .count {
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tally .who {
+  grid-column: 2;
+  font-size: 0.9rem;
+}
+
+.shares-title {
+  margin: 26px 0 8px;
+}
+
+.share-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.share-head b {
+  font-size: 1.1rem;
+}
+
+.share-head .paid {
+  width: auto;
+  margin-left: auto;
+  min-height: 40px;
+}
+
+.button.paid.on {
+  background: var(--mark);
+  border-color: var(--mark);
+  color: var(--on-ink);
+}
+
+.share.is-paid {
+  opacity: 0.8;
+}
+
+.others {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+/* The wall: where from, how far along, and the menu's own QR code. */
+.ow-place {
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  margin: 6px 0 10px;
+}
+
+.ow-count {
+  font-size: 1.4rem;
+}
+
+.ow-note {
+  white-space: pre-line;
+  font-size: 1.15rem;
+}
+
+.ow-menu-qr svg {
+  width: min(220px, 40vw);
+  height: auto;
+}

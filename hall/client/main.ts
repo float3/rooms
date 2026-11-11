@@ -68,6 +68,7 @@ const ABOUT: Record<string, string> = {
   numbers: "Everyone picks a number, and a rule decides who wins.",
   estimate: "Give a range you are 90% sure of. Learn how sure you should be.",
   updating: "Pair up with whoever disagrees with you most, and talk.",
+  order: "Everybody picks from the menu on their phone; you get the whole order.",
 };
 
 /** The names, for the start page, which has no room to ask. */
@@ -76,6 +77,7 @@ const NAMES: Record<string, string> = {
   numbers: "Number games",
   estimate: "Estimation",
   updating: "Speed updating",
+  order: "Food order",
 };
 
 /** Points a frame at a page, unless it is already there, so that a

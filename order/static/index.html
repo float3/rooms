@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f8f7f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121512" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex">
+<title>Food order</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main>
+  <header class="bar">
+    <a class="brand" href="/"><img src="/icon.svg" alt="" width="26" height="26">Food order</a>
+    <span class="note" id="where"></span>
+  </header>
+
+  <p class="error" id="error" hidden></p>
+
+  <section id="screen-start" hidden>
+    <p class="eyebrow">For a room of people</p>
+    <h1>One order for everybody</h1>
+    <p class="lead">Paste the link to the menu. Everybody opens it on their
+      phone and adds what they want. Your screen has the whole order,
+      counted up and ready to read out or paste.</p>
+    <div class="actions"><button class="button primary" id="open">Start an order</button></div>
+  </section>
+
+  <section id="screen-host" hidden>
+    <div class="panel" id="room">
+      <h2>The room</h2>
+      <p class="note">Everybody opens this:</p>
+      <div id="share"></div>
+      <details id="in-room">
+        <summary class="eyebrow" id="who">Nobody has joined yet</summary>
+        <ul id="people"></ul>
+      </details>
+      <div id="wall-button"></div>
+    </div>
+
+    <details class="panel" id="about" open>
+      <summary><h2 id="about-title">Where from</h2></summary>
+      <form id="place-form">
+        <label for="place">The place</label>
+        <input id="place" maxlength="80" autocomplete="off" placeholder="Pizzeria Da Mario">
+        <label for="menu">Link to the menu</label>
+        <input id="menu" type="text" inputmode="url" maxlength="1000" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…">
+        <label for="note">Anything else <span class="note">(optional)</span></label>
+        <textarea id="note" maxlength="280" rows="2" placeholder="Ordering at 19:30. Pay me in cash or PayPal."></textarea>
+        <div class="actions"><button class="button primary" type="submit" id="save">Save</button></div>
+      </form>
+    </details>
+
+    <section class="panel" id="summary">
+      <p class="eyebrow" id="h-state"></p>
+      <h2 id="h-place"></h2>
+      <p class="menu-line" id="h-menu"></p>
+      <p class="note" id="progress"></p>
+      <div class="actions">
+        <button class="button" id="copy">Copy the order</button>
+        <button class="button primary" id="toggle"></button>
+      </div>
+      <div id="tally"></div>
+    </section>
+
+    <section id="shares"></section>
+  </section>
+
+  <section id="screen-join" hidden>
+    <p class="eyebrow">You have been asked what you would like</p>
+    <h1>Join the order</h1>
+    <form class="panel" id="name-form">
+      <label for="name">Your name</label>
+      <input id="name" maxlength="32" required autocomplete="nickname" autocapitalize="words">
+      <p class="note">The host sees it next to what you order.</p>
+      <div class="actions"><button class="button primary" type="submit">Join</button></div>
+    </form>
+    <p class="note" id="join-count"></p>
+  </section>
+
+  <section id="screen-player" hidden>
+    <p class="note" id="you"></p>
+    <section class="panel">
+      <p class="eyebrow" id="p-state"></p>
+      <h1 id="p-place">Waiting for the host</h1>
+      <p class="menu-line" id="p-menu"></p>
+      <p class="host-note" id="p-note" hidden></p>
+      <ul class="items" id="mine"></ul>
+      <p class="note" id="mine-total"></p>
+      <form id="add-form">
+        <label for="what">What would you like?</label>
+        <input id="what" maxlength="120" autocomplete="off" placeholder="Margherita, large, no basil">
+        <label for="price">Price in € <span class="note">(optional)</span></label>
+        <input id="price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="9.50">
+        <div class="actions send"><button class="button primary" type="submit" id="add">Add to the order</button></div>
+      </form>
+    </section>
+    <details class="panel" id="others-box">
+      <summary class="eyebrow" id="others-title">What everybody else is having</summary>
+      <div id="others"></div>
+    </details>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -125,6 +125,17 @@ as the games on their own.
 petrov is in it with a seat per person: each name goes to the country
 with fewer people in it.
 
+`order/` is a tool rather than a game, and lives in this workspace: one
+food order for the room. the host gives the place and a link to its
+menu; every phone opens the menu, adds what it wants (with a price if it
+likes), and can see what everybody else is having. the host's screen
+has each person's items, the same things counted together for reading
+out to the place, the total, who has not ordered yet, a button that
+copies the whole order as text, and who has paid. closing the order
+stops changes. the wall shows the place and the menu as a QR code, not
+who wants what. it runs on its own too (`cargo run -p order`,
+`ORDER_ADDR`, default `127.0.0.1:8104`).
+
 the hall's people are a lobby too, with a wall at `/w/<key>` that shows
 the code, who is in, and the current game's own wall in a frame. the
 host can take somebody out of the hall and every game it seated them in.

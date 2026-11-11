@@ -95,7 +95,7 @@ async fn the_host_picks_a_game_and_everybody_is_in_it() {
         !view.to_string().contains(&ada),
         "no player keys for the host"
     );
-    assert_eq!(view["games"].as_array().unwrap().len(), 4);
+    assert_eq!(view["games"].as_array().unwrap().len(), 5);
 
     let view = ok(
         &app,
@@ -601,7 +601,7 @@ async fn a_game_this_server_does_not_play_is_refused() {
 #[tokio::test]
 async fn every_game_is_served_under_its_own_path_with_its_links_moved_there() {
     let app = server("paths");
-    for game in ["petrov", "numbers", "estimate", "updating"] {
+    for game in ["petrov", "numbers", "estimate", "updating", "order"] {
         let response = app
             .clone()
             .oneshot(
@@ -617,4 +617,51 @@ async fn every_game_is_served_under_its_own_path_with_its_links_moved_there() {
         assert!(page.contains(&format!("src=\"/{game}/app.js\"")), "{game}");
         assert!(page.contains(&format!("content=\"/{game}\"")), "{game}");
     }
+}
+
+#[tokio::test]
+async fn the_room_orders_food_and_the_host_sees_everybody_s_order() {
+    let app = server("order");
+    let (host, _, ada, bo) = hall(&app).await;
+    let view = ok(
+        &app,
+        "POST",
+        &format!("/api/h/{host}/play"),
+        Some(json!({"tool": "order"})),
+    )
+    .await["view"]
+        .clone();
+    assert_eq!(view["playing"]["title"], "Food order");
+    let order_host = key_in(&view["playing"]["url"]);
+    ok(
+        &app,
+        "PUT",
+        &format!("/order/api/h/{order_host}/place"),
+        Some(json!({"place": "Da Mario", "menu": "https://damario.example/menu"})),
+    )
+    .await;
+
+    for (person, what) in [(&ada, "Margherita"), (&bo, "Diavola")] {
+        let mine = ok(&app, "GET", &format!("/api/p/{person}"), None).await["view"].clone();
+        let player = key_in(&mine["playing"]["url"]);
+        let theirs = ok(
+            &app,
+            "POST",
+            &format!("/order/api/p/{player}/items"),
+            Some(json!({ "what": what })),
+        )
+        .await["view"]
+            .clone();
+        assert_eq!(theirs["menu"], "https://damario.example/menu");
+    }
+
+    let order = ok(&app, "GET", &format!("/order/api/h/{order_host}"), None).await["view"].clone();
+    let names: Vec<&str> = order["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Ada", "Bo"]);
+    assert_eq!(order["items"], 2);
 }

@@ -1,5 +1,5 @@
 [workspace]
-members = ["rooms", "rooms-client", "hall"]
+members = ["rooms", "rooms-client", "hall", "order"]
 resolver = "3"
 
 # The games depend on rooms from GitHub. Inside this workspace they use

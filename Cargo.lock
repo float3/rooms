@@ -376,6 +376,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "order"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "rooms",
+ "rooms-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "password-hash"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -497,6 +511,7 @@ dependencies = [
  "estimate",
  "http-body-util",
  "numbers",
+ "order",
  "petrov",
  "rooms",
  "rooms-client",

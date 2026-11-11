@@ -19,6 +19,7 @@ petrov = { git = "https://github.com/float3/petrov" }
 numbers = { git = "https://github.com/float3/numbers" }
 estimate = { git = "https://github.com/float3/estimate" }
 updating = { git = "https://github.com/float3/updating" }
+order = { path = "../order" }
 
 [build-dependencies]
 rooms-client = { path = "../rooms-client" }
