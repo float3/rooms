@@ -1,7 +1,5 @@
 # updating
 
-[![CI](https://github.com/float3/updating/actions/workflows/ci.yml/badge.svg)](https://github.com/float3/updating/actions/workflows/ci.yml)
-
 speed updating for a room of people, at
 [updating.rationality-munich.com](https://updating.rationality-munich.com).
 
@@ -10,7 +8,7 @@ whoever disagrees with them most, a few minutes at a time, and says where
 they stand afterwards. the format comes from EA groups, who run it on
 paper; thanks to Noah Birnbaum for telling us about it.
 
-built on [rooms](https://github.com/float3/rooms).
+built on [rooms](../README.md).
 
 ## how an evening goes
 
@@ -198,7 +196,7 @@ called Alex stay two people; a phone that kept its link goes straight
 back in. joining and presence are `rooms::lobby`'s.
 
 the key in the link is the only access control: 24 random characters and
-no accounts. see [rooms](https://github.com/float3/rooms) for what that
+no accounts. see [rooms](../README.md) for what that
 does and does not protect.
 
 the facilitator sees everything. a player is sent their own answers, and
@@ -209,7 +207,7 @@ who disagree with them most, with both answers on that one statement.
 ## running it
 
 ```sh
-nix run github:float3/updating
+nix run github:float3/rooms#updating
 ```
 
 | | |
@@ -218,7 +216,7 @@ nix run github:float3/updating
 | `UPDATING_STATE` | where the rooms are kept. `rooms.json`. |
 | `UPDATING_SUGGESTIONS` | where suggested statements go. `suggestions.jsonl`. |
 
-the NixOS module takes a port and the domains to serve on:
+the NixOS module, `nixosModules.updating` in the workspace flake, takes a port and the domains to serve on:
 
 ```nix
 services.updating = {
@@ -233,9 +231,9 @@ rooms are forgotten a day after anyone last looked at one.
 ## development
 
 ```sh
-nix develop --command cargo test
+nix develop --command cargo test -p updating
 ```
 
 the page is TypeScript in `client/`, compiled into the binary by the build
-script with [rooms-client](https://github.com/float3/rooms). no
+script with [rooms-client](../rooms-client). no
 JavaScript is written by hand here.

@@ -431,7 +431,7 @@ pub fn router(petrov: Petrov) -> Router {
 }
 
 /// The site, for mounting under `base` with `Router::nest`, which is how
-/// the shared room in float3/rooms serves it next to the other games.
+/// the hall serves it next to the other games.
 /// The shared room links to `/h/<key>` for the game and `/p/<key>` for a
 /// player, which here are the setup screen and a country's console.
 pub fn router_under(petrov: Petrov, base: &str) -> Router {

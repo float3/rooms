@@ -1,9 +1,12 @@
 [workspace]
-members = ["rooms", "rooms-client", "hall", "order"]
+members = [
+  "rooms",
+  "rooms-client",
+  "hall",
+  "petrov",
+  "numbers",
+  "estimate",
+  "updating",
+  "order",
+]
 resolver = "3"
-
-# The games depend on rooms from GitHub. Inside this workspace they use
-# the copy here instead, so the hall and the games share one rooms.
-[patch."https://github.com/float3/rooms"]
-rooms = { path = "rooms" }
-rooms-client = { path = "rooms-client" }

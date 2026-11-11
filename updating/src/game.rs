@@ -503,7 +503,7 @@ impl HasLobby for Game {
         sheet.away || paired || warmed || started
     }
 
-    /// What the projector shows: see [`crate::view::wall`].
+    /// What the projector shows: see `view::wall`.
     fn wall_game(&self, _now: u64) -> Value {
         serde_json::to_value(crate::view::wall(self)).unwrap_or_default()
     }

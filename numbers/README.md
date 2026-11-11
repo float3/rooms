@@ -1,14 +1,12 @@
 # numbers
 
-[![CI](https://github.com/float3/numbers/actions/workflows/ci.yml/badge.svg)](https://github.com/float3/numbers/actions/workflows/ci.yml)
-
 number games for a room of people, at
 [numbers.rationality-munich.com](https://numbers.rationality-munich.com).
 
 everyone picks a number, and the rule decides who wins. under every rule
 here, what a number is worth depends on what everybody else picked.
 
-built on [rooms](https://github.com/float3/rooms).
+built on [rooms](../README.md).
 
 ## the rules
 
@@ -73,13 +71,13 @@ who is in; their link stops working.
 | `/w/<key>` | the wall. It shows only what the whole room may see, and runs nothing. |
 
 the key in the link is the only access control: 24 random characters, and
-no accounts. see [rooms](https://github.com/float3/rooms) for what that
+no accounts. see [rooms](../README.md) for what that
 does and does not protect.
 
 ## running it
 
 ```sh
-nix run github:float3/numbers
+nix run github:float3/rooms#numbers
 ```
 
 | | |
@@ -87,7 +85,7 @@ nix run github:float3/numbers
 | `NUMBERS_ADDR` | what to listen on. `127.0.0.1:8098`. |
 | `NUMBERS_STATE` | where the rooms are kept. `rooms.json`. |
 
-the NixOS module takes a port and the domains to serve on:
+the NixOS module, `nixosModules.numbers` in the workspace flake, takes a port and the domains to serve on:
 
 ```nix
 services.numbers = {
@@ -102,10 +100,10 @@ rooms are forgotten a day after anyone last looked at one.
 ## development
 
 the page is TypeScript in `client/`, compiled into the binary by the build
-script with [rooms-client](https://github.com/float3/rooms). `esbuild`
+script with [rooms-client](../rooms-client). `esbuild`
 bundles it and `tsc` checks it, both from the dev shell. no JavaScript is
 written by hand here.
 
 ```sh
-nix develop --command cargo test
+nix develop --command cargo test -p numbers
 ```

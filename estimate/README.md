@@ -1,7 +1,5 @@
 # estimate
 
-[![CI](https://github.com/float3/estimate/actions/workflows/ci.yml/badge.svg)](https://github.com/float3/estimate/actions/workflows/ci.yml)
-
 the estimation game for a room of people, at
 [estimate.rationality-munich.com](https://estimate.rationality-munich.com).
 
@@ -18,7 +16,7 @@ counts as an answer. the second pass is what makes the first one worth
 collecting: everybody sees how far the discussion moved them, and the room
 sees whether the second answers were closer to the truth.
 
-built on [rooms](https://github.com/float3/rooms).
+built on [rooms](../README.md).
 
 ## what it reports
 
@@ -96,7 +94,7 @@ list of who is in, and their link stops working.
 the key in the link is the only access control: 24 random characters, and
 no accounts. anyone with the host link can run the room. that is
 appropriate for a group of people sitting together and not for anything
-else; see [rooms](https://github.com/float3/rooms) for what it does and
+else; see [rooms](../README.md) for what it does and
 does not protect.
 
 the host sees everything. a player is sent their own two ranges and how
@@ -107,7 +105,7 @@ which would tell them whether their range had contained it.
 ## running it
 
 ```sh
-nix run github:float3/estimate
+nix run github:float3/rooms#estimate
 ```
 
 | | |
@@ -115,7 +113,7 @@ nix run github:float3/estimate
 | `ESTIMATE_ADDR` | what to listen on. `127.0.0.1:8097`. |
 | `ESTIMATE_STATE` | where the rooms are kept. `rooms.json`. |
 
-the NixOS module takes a port and the domains to serve on:
+the NixOS module, `nixosModules.estimate` in the workspace flake, takes a port and the domains to serve on:
 
 ```nix
 services.estimate = {
@@ -130,10 +128,10 @@ rooms are forgotten a day after anyone last looked at one.
 ## development
 
 ```sh
-nix develop --command cargo test
+nix develop --command cargo test -p estimate
 ```
 
 the page is TypeScript in `client/`, compiled into the binary by the build
-script with [rooms-client](https://github.com/float3/rooms). `esbuild`
+script with [rooms-client](../rooms-client). `esbuild`
 bundles it and `tsc` checks it, both from the dev shell. no JavaScript is
 written by hand here.

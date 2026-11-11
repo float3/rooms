@@ -6,11 +6,11 @@ license = "AGPL-3.0-only"
 description = "The estimation game for a room of people: one question, everyone's bounds, and what the room thought."
 
 [build-dependencies]
-rooms-client = { git = "https://github.com/float3/rooms" }
+rooms-client = { path = "../rooms-client" }
 
 [dependencies]
 axum = "0.8"
-rooms = { git = "https://github.com/float3/rooms" }
+rooms = { path = "../rooms" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -12,10 +12,12 @@ are kept in one JSON file, so restarting the server in the middle of an
 evening does not lose what is in progress, and a room is deleted once
 nobody has opened it for a day.
 
-used by [petrov](https://github.com/float3/petrov),
-[estimate](https://github.com/float3/estimate),
-[numbers](https://github.com/float3/numbers) and
-[updating](https://github.com/float3/updating).
+the games built on it live here too, each in its own folder:
+[petrov](petrov), [estimate](estimate), [numbers](numbers),
+[updating](updating) and the food [order](order). each one still runs on
+its own server (`cargo run -p <name>`), and the flake has a package for
+each and a NixOS module for each game (`.#petrov`,
+`nixosModules.petrov`, and so on).
 
 ## what is here
 
@@ -102,10 +104,8 @@ can use them.
 
 ## one room for every game
 
-`hall/` is a server that runs [petrov](https://github.com/float3/petrov),
-[numbers](https://github.com/float3/numbers),
-[estimate](https://github.com/float3/estimate) and
-[updating](https://github.com/float3/updating) together, each under its
+`hall/` is a server that runs petrov, numbers, estimate, updating and
+the food order together, each under its
 own path, with a room of its own on top. The room has one join link and
 one QR code for the whole evening. The host picks a game; the hall opens
 a room in it, or goes back to the one it opened earlier, and joins
@@ -125,7 +125,7 @@ as the games on their own.
 petrov is in it with a seat per person: each name goes to the country
 with fewer people in it.
 
-`order/` is a tool rather than a game, and lives in this workspace: one
+`order/` is a tool rather than a game: one
 food order for the room. the host gives the place and a link to its
 menu; every phone opens the menu, adds what it wants (with a price if it
 likes), and can see what everybody else is having. the host's screen
@@ -149,7 +149,7 @@ stylesheet the pages share: the event stream, the request helper,
 number formatting, the QR code, the lobby's screens, and the styles for
 panels, tables and buttons.
 
-none of these repositories contain hand-written JavaScript. a tool keeps
+none of these crates contain hand-written JavaScript. a tool keeps
 its TypeScript in `client/`, calls `rooms_client::bundle("client")` from
 its `build.rs`, and includes the output:
 

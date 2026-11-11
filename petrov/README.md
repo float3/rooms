@@ -2,15 +2,15 @@
 
 a Petrov Day ritual for two countries: one missile each, a warning window, and false alarms that look exactly like real launches.
 
-built on [rooms](https://github.com/float3/rooms), which holds the parts
+built on [rooms](../README.md), which holds the parts
 all three of these tools share: the keys, the event streams, the store,
-the QR codes, and the browser code under this page. this repository holds
+the QR codes, and the browser code under this page. this folder holds
 the ritual itself.
 
 ## run
 
 ```sh
-nix develop --command cargo run
+nix develop --command cargo run -p petrov
 ```
 
 listens on `127.0.0.1:8095` (`PETROV_ADDR`) and stores games in `games.json` (`PETROV_STATE`). open `/`, create a game and send the game link to the other host. each host claims their own country once and shares the resulting country link with everyone in that country. the game goes live when both countries press Start and ends when a country requests the end and nothing is in flight.
@@ -32,9 +32,9 @@ stylesheet.
 ## NixOS
 
 ```nix
-inputs.petrov.url = "github:float3/petrov";
+inputs.rooms.url = "github:float3/rooms";
 
-imports = [inputs.petrov.nixosModules.default];
+imports = [inputs.rooms.nixosModules.petrov];
 services.petrov.sites = {
   petrov = {
     port = 8095;

@@ -15,21 +15,29 @@
   in {
     formatter = forAllSystems (pkgs: pkgs.alejandra);
 
-    packages = forAllSystems (pkgs: {
+    packages = forAllSystems (pkgs: let
+      # One server from the workspace. Every crate is a path in it, so
+      # Cargo.lock is the whole of what is fetched.
+      server = pname: pkgs.rustPlatform.buildRustPackage {
+        inherit pname;
+        version = "0.1.0";
+        src = lib.cleanSource self;
+        # The pages are TypeScript; the build scripts compile them with these.
+        nativeBuildInputs = with pkgs; [esbuild typescript];
+        cargoLock.lockFile = ./Cargo.lock;
+        cargoBuildFlags = ["-p" pname];
+        cargoTestFlags = ["-p" pname];
+        meta.mainProgram = pname;
+      };
+    in {
       # The two libraries, so there is nothing to install and the output
       # is empty on purpose. Building it compiles both crates and runs
-      # their tests against the locked dependencies, which is what the
-      # tools that depend on them want to know.
+      # their tests against the locked dependencies.
       default = pkgs.rustPlatform.buildRustPackage {
         pname = "rooms";
         version = "0.1.0";
         src = lib.cleanSource self;
-        # The games the hall serves are git dependencies, pinned by rev in
-        # Cargo.lock, so no hashes need to be kept here.
-        cargoLock = {
-          lockFile = ./Cargo.lock;
-          allowBuiltinFetchGit = true;
-        };
+        cargoLock.lockFile = ./Cargo.lock;
         cargoBuildFlags = ["-p" "rooms" "-p" "rooms-client"];
         cargoTestFlags = ["-p" "rooms" "-p" "rooms-client"];
         doCheck = true;
@@ -37,19 +45,14 @@
       };
 
       # One server for every game, with one room that moves between them.
-      hall = pkgs.rustPlatform.buildRustPackage {
-        pname = "rooms-hall";
-        version = "0.1.0";
-        src = lib.cleanSource self;
-        nativeBuildInputs = with pkgs; [esbuild typescript];
-        cargoLock = {
-          lockFile = ./Cargo.lock;
-          allowBuiltinFetchGit = true;
-        };
-        cargoBuildFlags = ["-p" "rooms-hall"];
-        cargoTestFlags = ["-p" "rooms-hall"];
-        meta.mainProgram = "rooms-hall";
-      };
+      hall = server "rooms-hall";
+
+      # Each game on its own server, as it ran before the hall.
+      petrov = server "petrov";
+      numbers = server "numbers";
+      estimate = server "estimate";
+      updating = server "updating";
+      order = server "order";
     });
 
     devShells = forAllSystems (pkgs: {
@@ -57,8 +60,15 @@
         packages = with pkgs; [cargo clippy rustc rustfmt esbuild typescript];
       };
     });
-  
-    nixosModules.default = {
+
+    # The hall, and each game on its own as it was served before.
+    nixosModules.default = self.nixosModules.hall;
+    nixosModules.petrov = import ./petrov/module.nix self.packages;
+    nixosModules.numbers = import ./numbers/module.nix self.packages;
+    nixosModules.estimate = import ./estimate/module.nix self.packages;
+    nixosModules.updating = import ./updating/module.nix self.packages;
+
+    nixosModules.hall = {
       config,
       lib,
       pkgs,
