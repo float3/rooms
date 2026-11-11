@@ -18,17 +18,18 @@
     packages = forAllSystems (pkgs: let
       # One server from the workspace. Every crate is a path in it, so
       # Cargo.lock is the whole of what is fetched.
-      server = pname: pkgs.rustPlatform.buildRustPackage {
-        inherit pname;
-        version = "0.1.0";
-        src = lib.cleanSource self;
-        # The pages are TypeScript; the build scripts compile them with these.
-        nativeBuildInputs = with pkgs; [esbuild typescript];
-        cargoLock.lockFile = ./Cargo.lock;
-        cargoBuildFlags = ["-p" pname];
-        cargoTestFlags = ["-p" pname];
-        meta.mainProgram = pname;
-      };
+      server = pname:
+        pkgs.rustPlatform.buildRustPackage {
+          inherit pname;
+          version = "0.1.0";
+          src = lib.cleanSource self;
+          # The pages are TypeScript; the build scripts compile them with these.
+          nativeBuildInputs = with pkgs; [esbuild typescript];
+          cargoLock.lockFile = ./Cargo.lock;
+          cargoBuildFlags = ["-p" pname];
+          cargoTestFlags = ["-p" pname];
+          meta.mainProgram = pname;
+        };
     in {
       # The two libraries, so there is nothing to install and the output
       # is empty on purpose. Building it compiles both crates and runs
