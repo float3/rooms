@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>{{DAY}}</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<style>
+:root {
+  --bg: #0b0d0c;
+  --panel: #151917;
+  --line: #2a302d;
+  --text: #e8e6df;
+  --muted: #8d918c;
+  --green: #7ddc8b;
+  --red: #e5383b;
+  --red-deep: #8a0f16;
+  --amber: #f4b942;
+  /* What rooms-client's lobby pieces are coloured from. */
+  --border: var(--line);
+  --body: var(--muted);
+  --mark: var(--green);
+  --bad: var(--red);
+  --ink: #3a0509;
+  --on-ink: #fff;
+  --shadow: rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body {
+  font: 16px/1.45 ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  min-height: 100dvh;
+  -webkit-tap-highlight-color: transparent;
+}
+main { max-width: 720px; margin: 0 auto; padding: 20px 16px 64px; }
+h1, h2, h3 { font-weight: 600; letter-spacing: .02em; margin: 0; }
+h3 { font-size: 15px; margin-bottom: 8px; }
+p { margin: 10px 0; }
+small, .muted { color: var(--muted); }
+small { text-transform: uppercase; letter-spacing: .12em; font-size: 11px; }
+a { color: var(--green); }
+[hidden] { display: none !important; }
+button, input, textarea { font: inherit; color: inherit; }
+button {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 12px 16px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.primary { background: var(--green); color: #07130a; border-color: var(--green); font-weight: 600; }
+button.danger { border-color: var(--red); color: var(--red); }
+button.big { font-size: 20px; padding: 16px 28px; }
+label { display: block; margin: 14px 0 4px; color: var(--muted); font-size: 13px; }
+input, textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+}
+textarea { min-height: 64px; resize: vertical; }
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 4px 16px 16px; margin: 16px 0; min-width: 0; }
+legend { padding: 0 6px; color: var(--green); }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.row > * { min-width: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0; }
+.error { color: var(--red); }
+.hint { font-size: 13px; color: var(--muted); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 16px 0; }
+.link { word-break: break-all; color: var(--green); display: block; margin: 6px 0 10px; font-size: 14px; }
+.qr { background: #fff; padding: 12px; border-radius: 8px; width: fit-content; margin: 8px 0; }
+/* Low specificity, so the lobby's own sizes for its codes win. */
+:where(.qr) svg { display: block; width: 220px; height: auto; }
+.title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.title h1 { font-size: 22px; }
+.status-line { font-size: 22px; margin: 32px 0; text-align: center; }
+.ok { color: var(--green); }
+.warn { color: var(--amber); }
+.bad { color: var(--red); }
+
+header.stations { display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+header.stations .right { text-align: right; }
+header.stations h1, header.stations h2 { font-size: 20px; overflow-wrap: anywhere; }
+
+#banners { position: sticky; top: 0; z-index: 15; }
+#banners .banner:first-child { margin-top: 8px; }
+.banner {
+  display: block; width: 100%; text-align: center; font-weight: 700; letter-spacing: .06em;
+  padding: 16px; border-radius: 8px; margin: 0 0 12px; border: 2px solid;
+}
+.banner.unlock { background: #2b2107; border-color: var(--amber); color: var(--amber); font-size: 18px; }
+.banner.lost { background: #3a0509; border-color: var(--red); color: #fff; font-size: 26px; animation: pulse 1s steps(2, jump-none) infinite; }
+.banner.background { background: var(--panel); border-color: var(--amber); color: var(--amber); font-weight: 400; letter-spacing: 0; font-size: 14px; }
+
+.alert {
+  border: 2px solid var(--red); border-radius: 10px; padding: 16px; margin: 16px 0; text-align: center;
+  background: #2a0608; animation: pulse 1s steps(2, jump-none) infinite;
+}
+.alert.acked { animation: none; }
+.alert h2 { color: var(--red); font-size: clamp(22px, 6vw, 32px); }
+.alert .big { font-size: clamp(56px, 18vw, 110px); font-variant-numeric: tabular-nums; line-height: 1; margin: 8px 0; color: #fff; }
+.alert.done { animation: none; background: var(--panel); border-color: var(--line); }
+.alert.done h2 { color: var(--text); }
+@keyframes pulse { 0% { background: #2a0608; } 100% { background: #5a0b10; } }
+body.alarm { animation: flash 1s steps(2, jump-none) infinite; }
+@keyframes flash { 0% { background: var(--bg); } 100% { background: #1e0406; } }
+
+.outgoing { border: 2px solid var(--amber); border-radius: 10px; padding: 16px; margin: 16px 0; text-align: center; }
+.outgoing h2 { color: var(--amber); font-size: 22px; }
+.outgoing .big { font-size: clamp(44px, 14vw, 80px); font-variant-numeric: tabular-nums; line-height: 1.1; }
+
+.console { text-align: center; margin: 28px 0; }
+.launch {
+  position: relative; overflow: hidden; width: min(260px, 70vw); aspect-ratio: 1; border-radius: 50%;
+  border: 6px solid #3a0a0d; background: radial-gradient(circle at 35% 30%, #ff5a5f, var(--red) 45%, var(--red-deep));
+  box-shadow: 0 10px 0 #4a070b, 0 18px 40px rgba(229, 56, 59, .25);
+  color: #fff; font-weight: 700; font-size: 19px; letter-spacing: .08em; text-transform: uppercase;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.launch:active:not(:disabled) { transform: translateY(6px); box-shadow: 0 4px 0 #4a070b; }
+.launch:disabled { filter: grayscale(.85) brightness(.6); opacity: 1; }
+.launch .fill { position: absolute; inset: auto 0 0 0; height: 0; background: rgba(0, 0, 0, .45); pointer-events: none; }
+.launch .label { position: relative; pointer-events: none; }
+.console .status { margin-top: 16px; min-height: 1.5em; }
+
+.hit {
+  position: fixed; inset: 0; z-index: 20; background: #120203; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px; padding: 24px; text-align: center;
+}
+.hit h1 { font-size: clamp(34px, 10vw, 64px); color: var(--red); }
+.hit .consequence { font-size: clamp(22px, 6vw, 36px); white-space: pre-wrap; max-width: 900px; overflow-wrap: anywhere; }
+
+ul.plain, ol.plain { list-style: none; padding: 0; margin: 8px 0 0; }
+ol.timeline li, ul.log li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; gap: 12px; }
+ol.timeline time, ul.log time { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.reveal h2 { font-size: clamp(24px, 7vw, 36px); margin: 24px 0 8px; }
+.consequences p { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+details { border: 1px solid var(--line); border-radius: 8px; margin: 16px 0; }
+details > summary { cursor: pointer; padding: 14px 16px; }
+details > div { padding: 0 16px 16px; }
+.check { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.check .result { grid-column: 1 / -1; font-size: 14px; }
+.check .buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.check button { padding: 8px 12px; }
+
+h2 { font-size: 19px; margin: 32px 0 8px; }
+.main-posts li { margin: 12px 0; }
+ul.posts { padding-left: 20px; margin: 4px 0; }
+ul.posts li { margin: 6px 0; }
+.home-links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 8px 0 16px; }
+.group { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 16px 0; }
+.group h3 { font-size: 18px; margin: 0 0 4px; overflow-wrap: anywhere; }
+.group .meta { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.group .description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.group .contact { overflow-wrap: anywhere; }
+.group .manage { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.group .manage button { padding: 6px 10px; font-size: 14px; }
+.group .manage input { width: auto; flex: 1 1 160px; padding: 6px 10px; }
+
+footer.source { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; }
+footer.source a { color: var(--muted); }
+footer.source a:hover { color: var(--green); }
+
+@media (max-width: 520px) {
+  .row { grid-template-columns: 1fr; gap: 0; }
+  .check { grid-template-columns: 1fr; }
+  .check .buttons { justify-content: flex-start; }
+}
+  /* Inside the shared room, which splits the room into countries
+     itself, the setup speaks to that instead of to two hosts. */
+  .in-room { display: none; }
+  html.embedded .in-room { display: block; }
+  html.embedded .on-own { display: none; }
+
+/* The lobby's pieces from rooms-client bring their own styles, coloured
+   from these. Only what this page's look adds is here. */
+a.button {
+  display: inline-block; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 12px 16px; color: var(--text); text-decoration: none;
+}
+a.button:hover { border-color: var(--muted); }
+p.note.wall-open { font-size: 13px; color: var(--muted); }
+.eyebrow { color: var(--muted); text-transform: uppercase; letter-spacing: .12em; margin: 0; }
+
+/* The wall: a projector across a room, so everything is large. */
+.wall-screen footer.source { display: none; }
+.wall-game small { font-size: .6em; }
+.wall-status { font-size: clamp(28px, 4.5vw, 64px); font-weight: 700; margin: 0 0 16px; }
+.wall-clock { font-size: clamp(56px, 10vw, 160px); font-variant-numeric: tabular-nums; line-height: 1; margin: 8px 0; }
+.wall-countries { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.wall-country { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; min-width: 0; }
+.wall-country h2 { font-size: clamp(24px, 3.4vw, 48px); margin: 0; overflow-wrap: anywhere; }
+.wall-names li { padding: 2px 0; overflow-wrap: anywhere; }
+.wall-consequence { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+.wall-odds { font-size: .6em; margin: 0; }
+label.check { display: flex; gap: 8px; align-items: center; color: var(--fg); font-size: 15px; }
+label.check input { width: auto; margin: 0; }
+.wall-game .reveal h2 { font-size: clamp(28px, 4.5vw, 64px); margin-top: 0; }
+@media (max-width: 520px) {
+  .wall-countries { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div id="banners">
+    <div id="lostBanner" class="banner lost" hidden>CONNECTION LOST<br><small>reconnecting…</small></div>
+    <button id="unlockBanner" class="banner unlock" hidden>Tap here to enable the siren on this device</button>
+    <div id="backgroundBanner" class="banner background" hidden></div>
+  </div>
+  <p id="error" class="error" role="alert" hidden></p>
+
+  <section id="screen-join" hidden>
+    <div class="title"><h1>{{DAY}}</h1><small>join a country</small></div>
+    <p class="muted">Give your name. You are seated in the country with fewer people, and this phone becomes one of its command centres.</p>
+    <form id="name-form" autocomplete="off">
+      <label for="name">Your name</label>
+      <input id="name" maxlength="32" required>
+      <div class="actions"><button class="primary" type="submit">Join</button></div>
+    </form>
+    <p id="join-count" class="hint"></p>
+  </section>
+
+  <section id="home" hidden>
+    <div class="title"><h1>{{DAY}}</h1><small>a ritual for two countries</small></div>
+    <p>{{INTRO}}</p>
+    <p class="muted">Two groups, two countries. Each can launch one missile at the other. The target sees a warning and a countdown, and may retaliate before impact. There is no score and no winner. Nothing happening is the good outcome.</p>
+    <div class="actions">
+      <button id="createGame" class="primary big">Create a game</button>
+      <a href="/check">Pre-flight check for this device</a>
+    </div>
+    <div class="home-links">
+      <a href="/groups">Find another group</a>
+      <a href="/info">About {{DAY}} parties</a>
+    </div>
+    <p id="createError" class="error"></p>
+  </section>
+
+  <section id="info" hidden>
+    <p><a href="/">← {{DAY}}</a></p>
+    <div class="title"><h1>{{DAY}}</h1></div>
+{{INFO}}  </section>
+
+  <section id="groups" hidden>
+    <p><a href="/">← {{DAY}}</a></p>
+    <div class="title"><h1>Find another group</h1></div>
+    <p class="muted">A two-group {{DAY}} needs a second group. List your group, or contact one of the groups below and create a game together. Everything you enter here except the password is public. The board is cleared every year once {{DATE}} is over everywhere ({{RESET}}).</p>
+    <div class="actions"><button id="groupNew" class="primary">List your group</button></div>
+
+    <form id="groupForm" class="panel" autocomplete="off" hidden>
+      <h3 id="groupFormTitle">List your group</h3>
+      <label for="groupName">Group name</label>
+      <input id="groupName">
+      <label for="groupDescription">About your group</label>
+      <textarea id="groupDescription" placeholder="Who you are, how many people, what kind of evening you have in mind"></textarea>
+      <div class="row">
+        <div>
+          <label for="groupWhen">Rough time</label>
+          <input id="groupWhen" placeholder="e.g. {{DATE}}, around 19:30">
+        </div>
+        <div>
+          <label for="groupLocation">Location or time zone</label>
+          <input id="groupLocation" placeholder="e.g. Munich, CEST (UTC+2)">
+        </div>
+      </div>
+      <label for="groupContact">Email or other contact</label>
+      <input id="groupContact" placeholder="Shown publicly">
+      <label for="groupPassword">Password</label>
+      <input id="groupPassword" type="password" autocomplete="new-password">
+      <p class="hint" id="groupPasswordHint">You need this password to edit or delete your listing later. It cannot be recovered.</p>
+      <div class="actions">
+        <button id="groupSubmit" class="primary" type="submit">Publish</button>
+        <button id="groupCancel" type="button">Cancel</button>
+      </div>
+      <p id="groupError" class="error"></p>
+    </form>
+
+    <div id="groupList"></div>
+    <p id="groupEmpty" class="muted" hidden>No groups listed yet.</p>
+  </section>
+
+  <section id="checkPage" hidden>
+    <div class="title"><h1>Pre-flight check</h1></div>
+    <div id="checkPageBody"></div>
+  </section>
+
+  <section id="game" hidden>
+    <div class="title"><h1>{{DAY}}</h1><small id="gameStatus"></small></div>
+    <div id="gameSetup" hidden>
+      <p class="hint in-room">Everybody in the room has been split between the two countries, and each phone is its country's command centre. Name the countries and set the consequences below, then each country presses Start. Anybody who joins later goes to the smaller country. Until the game is live, you can move anybody to the other country from the list of people below.</p>
+      <p class="hint on-own">Send this game link to the host of the other country. Each host claims their own country below, and each country can be claimed only once. If your country is already claimed and it was not you, somebody else claimed it: set up a new game. Anyone with this game link can change the settings until the game is live.</p>
+      <div class="panel on-own">
+        <h3>Game link</h3>
+        <p class="hint">Send this to the host of the other country. Copy it before you claim: claiming takes you to your country's page.</p>
+        <div id="gameShare"></div>
+      </div>
+      <p class="hint" id="oddsHint">Keep the false alarms between the hosts. Countries are never told that false alarms exist or at what rate, until the reveal at the end.</p>
+      <div class="row" id="claims"></div>
+      <form id="settingsForm" autocomplete="off">
+        <div class="row">
+          <fieldset>
+            <legend>Country A</legend>
+            <label for="name0">Name</label>
+            <input id="name0" data-field="name" data-country="0">
+            <label for="cons0">Consequence when hit</label>
+            <textarea id="cons0" placeholder="e.g. We destroy our cake" data-field="consequence" data-country="0"></textarea>
+            <label for="chance0">Chance of at least one false alarm this evening (%)</label>
+            <input id="chance0" type="number" min="0" max="99.99" step="any" data-field="chance" data-country="0">
+            <p class="hint" id="estimate0"></p>
+          </fieldset>
+          <fieldset>
+            <legend>Country B</legend>
+            <label for="name1">Name</label>
+            <input id="name1" data-field="name" data-country="1">
+            <label for="cons1">Consequence when hit</label>
+            <textarea id="cons1" placeholder="e.g. We destroy our cake" data-field="consequence" data-country="1"></textarea>
+            <label for="chance1">Chance of at least one false alarm this evening (%)</label>
+            <input id="chance1" type="number" min="0" max="99.99" step="any" data-field="chance" data-country="1">
+            <p class="hint" id="estimate1"></p>
+          </fieldset>
+        </div>
+        <fieldset>
+          <legend>Ritual</legend>
+          <div class="row">
+            <div>
+              <label for="flight">Missile flight time and warning window (minutes)</label>
+              <input id="flight" type="number" min="0" step="any">
+            </div>
+            <div>
+              <label for="duration">Expected duration of the evening (minutes)</label>
+              <input id="duration" type="number" min="0" step="any">
+            </div>
+          </div>
+          <p class="hint">The expected duration only turns the chances above into the steady rate the game raises false alarms at. Changing it keeps each chance and changes the rate. The game has no fixed end: it ends when a country requests the end and nothing is in flight.</p>
+          <label class="check" for="tellOdds"><input id="tellOdds" type="checkbox"> Tell countries the odds</label>
+          <p class="hint">Off by default. When on, both countries and the wall view see each country's chance of at least one false alarm before the game.</p>
+        </fieldset>
+        <p id="saveStatus" class="hint"></p>
+      </form>
+    </div>
+    <div id="gameLive" hidden><p class="status-line">The game is live.</p></div>
+    <div id="gameReveal" hidden></div>
+    <div class="panel" id="people" hidden>
+      <h3>People</h3>
+      <div class="on-own">
+        <p class="hint">To split one room between the two countries instead, everybody opens this join link, or scans the code on the wall view, and gives their name. Each person goes to the country with fewer people, and their phone commands it.</p>
+        <div id="joinShare"></div>
+      </div>
+      <p class="hint" id="peopleCount"></p>
+      <ul id="players"></ul>
+    </div>
+    <div id="wall-button"></div>
+    <p id="gameMissing" class="error" hidden>This game link is not valid. The game may have been deleted.</p>
+  </section>
+
+  <section id="country" hidden>
+    <header class="stations">
+      <div><small>Your country</small><h1 id="me">…</h1></div>
+      <div class="right"><small>Other country</small><h2 id="other">…</h2></div>
+    </header>
+
+    <p id="watchNotice" class="panel" hidden>This is a <strong>watch-only</strong> link. You see and hear everything your country does, but only the command link can start, launch or request the end.</p>
+
+    <div id="countryMissing" hidden><p class="error">This country link is not valid. The host may have taken you out of the game, or it was deleted. If you lost your country link, set up a new game.</p></div>
+
+    <div id="countrySetup" hidden>
+      <p class="panel">Keep at least one <strong>command center</strong> device per country open, on screen, unlocked and plugged in for the whole ritual. Run the pre-flight check below on it.</p>
+      <div class="panel">
+        <h3>Countries</h3>
+        <ul class="plain" id="readiness"></ul>
+      </div>
+      <div class="actions">
+        <button id="startButton" class="primary big">Start</button>
+      </div>
+      <p class="hint" id="startHint"></p>
+      <div id="setupSettings"></div>
+    </div>
+
+    <div id="countryLive" hidden>
+      <div id="warnings"></div>
+      <div id="outgoing"></div>
+      <div class="console" id="console">
+        <button id="launch" class="launch" disabled><span class="fill"></span><span class="label" id="launchLabel">Locked</span></button>
+        <div class="actions" style="justify-content:center"><button id="cover">Lift safety cover</button></div>
+        <div class="status" id="launchStatus"></div>
+      </div>
+      <div class="panel" id="endPanel">
+        <div id="endIdle">
+          <button id="endButton">Request the end</button>
+          <p class="hint">The end takes effect once nothing is in flight. A request cannot be withdrawn, and afterwards your country can only launch while a warning is on screen.</p>
+        </div>
+        <div id="endConfirm" hidden>
+          <p>Request the end of the ritual? This cannot be withdrawn.</p>
+          <div class="actions"><button id="endYes" class="danger">Yes, request the end</button><button id="endNo">Cancel</button></div>
+        </div>
+        <p id="endWaiting" hidden>You requested the end. Waiting for the world to settle…</p>
+      </div>
+      <details id="liveConsequences">
+        <summary>What happens if a country is hit</summary>
+        <div class="consequences" id="liveConsequencesBody"></div>
+      </details>
+      <ul class="plain log" id="log"></ul>
+    </div>
+
+    <div id="countryReveal" hidden></div>
+
+    <details id="shareBox">
+      <summary>Share this country with your citizens</summary>
+      <div>
+        <div id="commandShare">
+          <h3>Command link</h3>
+          <p class="hint">Anyone with this link is your country, on any number of devices. Every device can start, launch and request the end.</p>
+          <div id="countryShare"></div>
+        </div>
+        <h3>Watch-only link</h3>
+        <p class="hint">Anyone with this link sees and hears everything your country does, but cannot start, launch or request the end.</p>
+        <div id="watchShare"></div>
+      </div>
+    </details>
+    <details id="checkBox">
+      <summary>Pre-flight check for this device</summary>
+      <div id="checkBoxBody"></div>
+    </details>
+
+    <div id="hit" class="hit" hidden>
+      <h1>Your country was hit</h1>
+      <div class="consequence" id="hitConsequence"></div>
+      <button id="hitClose">Show the rest</button>
+    </div>
+  </section>
+  <footer class="source">
+    <a href="https://github.com/float3/petrov">Source on GitHub</a>
+  </footer>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
