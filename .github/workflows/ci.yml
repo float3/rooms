@@ -155,6 +155,7 @@ jobs:
                   flake.nixosModules.numbers
                   flake.nixosModules.estimate
                   flake.nixosModules.updating
+                  flake.nixosModules.order
                   {
                     boot.isContainer = true;
                     system.stateVersion = "26.05";
@@ -169,6 +170,7 @@ jobs:
                     services.numbers = { enable = true; domains = ["numbers.example.com"]; };
                     services.estimate = { enable = true; domains = ["estimate.example.com"]; };
                     services.updating = { enable = true; domains = ["updating.example.com"]; };
+                    services.order = { enable = true; port = 8105; domains = ["order.example.com"]; };
                   }
                 ];
               };
