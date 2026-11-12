@@ -62,111 +62,90 @@
       };
     });
 
-    # The hall, and each game on its own as it was served before.
-    nixosModules.default = self.nixosModules.hall;
-    nixosModules.petrov = import ./petrov/module.nix self.packages;
-    nixosModules.numbers = import ./numbers/module.nix self.packages;
-    nixosModules.estimate = import ./estimate/module.nix self.packages;
-    nixosModules.updating = import ./updating/module.nix self.packages;
-
-    nixosModules.hall = {
-      config,
-      lib,
-      pkgs,
-      ...
-    }: let
-      cfg = config.services.rooms-hall;
+    # The hall, and each game on its own as it was served before. Every one
+    # runs the same way; nix/server.nix says how.
+    nixosModules = let
+      units = import ./nix/server.nix {inherit lib;};
+      build = name: pkgs: self.packages.${pkgs.stdenv.hostPlatform.system}.${name};
     in {
-      options.services.rooms-hall = {
-        enable = lib.mkEnableOption "one server for every game, with rooms that move between them";
-        package = lib.mkOption {
-          type = lib.types.package;
-          default = self.packages.${pkgs.stdenv.hostPlatform.system}.hall;
-        };
-        port = lib.mkOption {
-          type = lib.types.port;
-          default = 8103;
-        };
-        domains = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = [];
-          description = "Serve through nginx with ACME on each of these domains.";
+      default = self.nixosModules.hall;
+      petrov = import ./petrov/module.nix {
+        inherit units;
+        package = build "petrov";
+      };
+
+      hall = units.module {
+        name = "rooms-hall";
+        description = "Games for a room";
+        summary = "one server for every game, with rooms that move between them";
+        port = 8103;
+        package = build "hall";
+        environment = {
+          addr,
+          state,
+        }: {
+          HALL_ADDR = addr;
+          # The halls and every game's rooms, one file each.
+          HALL_STATE = state;
         };
       };
 
-      config = lib.mkIf cfg.enable {
-        # systemd holds the port and passes it in, so the server itself
-        # needs no network, as with each game on its own.
-        systemd.sockets.rooms-hall = {
-          description = "Games for a room socket";
-          wantedBy = ["sockets.target"];
-          listenStreams = ["127.0.0.1:${toString cfg.port}"];
+      estimate = units.module {
+        name = "estimate";
+        description = "The estimation game";
+        port = 8097;
+        package = build "estimate";
+        environment = {
+          addr,
+          state,
+        }: {
+          ESTIMATE_ADDR = addr;
+          ESTIMATE_STATE = "${state}/rooms.json";
         };
+      };
 
-        systemd.services.rooms-hall = {
-          description = "Games for a room";
-          wantedBy = ["multi-user.target"];
-          requires = ["rooms-hall.socket"];
-          after = ["rooms-hall.socket"];
-          environment = {
-            HALL_ADDR = "127.0.0.1:${toString cfg.port}";
-            # The halls and every game's rooms, one file each.
-            HALL_STATE = "/var/lib/rooms-hall";
-          };
-          serviceConfig = {
-            ExecStart = lib.getExe cfg.package;
-            DynamicUser = true;
-            StateDirectory = "rooms-hall";
-            Restart = "always";
-            RestartSec = 1;
-
-            PrivateNetwork = true;
-            IPAddressDeny = "any";
-            RestrictAddressFamilies = "none";
-            TemporaryFileSystem = "/var/lib:ro";
-            InaccessiblePaths = ["-/mnt" "-/media" "-/srv"];
-            ProtectHome = true;
-            ProtectSystem = "strict";
-            PrivateTmp = true;
-            PrivateDevices = true;
-            DevicePolicy = "closed";
-            PrivateUsers = true;
-            PrivateIPC = true;
-            ProtectProc = "invisible";
-            ProcSubset = "pid";
-            ProtectClock = true;
-            ProtectHostname = true;
-            ProtectKernelLogs = true;
-            ProtectKernelModules = true;
-            ProtectKernelTunables = true;
-            ProtectControlGroups = true;
-            CapabilityBoundingSet = "";
-            NoNewPrivileges = true;
-            RestrictNamespaces = true;
-            RestrictRealtime = true;
-            RestrictSUIDSGID = true;
-            LockPersonality = true;
-            MemoryDenyWriteExecute = true;
-            RemoveIPC = true;
-            SystemCallArchitectures = "native";
-            SystemCallFilter = ["@system-service" "~@privileged @resources"];
-            SystemCallErrorNumber = "EPERM";
-            UMask = "0077";
-          };
+      numbers = units.module {
+        name = "numbers";
+        description = "Number games";
+        summary = "the number games";
+        port = 8098;
+        package = build "numbers";
+        environment = {
+          addr,
+          state,
+        }: {
+          NUMBERS_ADDR = addr;
+          NUMBERS_STATE = "${state}/rooms.json";
         };
+      };
 
-        services.nginx.virtualHosts = lib.genAttrs cfg.domains (domain: {
-          forceSSL = true;
-          enableACME = true;
-          locations."/" = {
-            proxyPass = "http://127.0.0.1:${toString cfg.port}";
-            # Event streams: nothing to buffer and nothing to time out.
-            extraConfig = ''
-              proxy_buffering off;
-              proxy_read_timeout 1h;
-            '';
-          };
-        });
+      updating = units.module {
+        name = "updating";
+        description = "Speed updating";
+        port = 8102;
+        package = build "updating";
+        environment = {
+          addr,
+          state,
+        }: {
+          UPDATING_ADDR = addr;
+          UPDATING_STATE = "${state}/rooms.json";
+          UPDATING_SUGGESTIONS = "${state}/suggestions.jsonl";
+        };
+      };
+
+      order = units.module {
+        name = "order";
+        description = "One food order for a room";
+        port = 8104;
+        package = build "order";
+        environment = {
+          addr,
+          state,
+        }: {
+          ORDER_ADDR = addr;
+          ORDER_STATE = "${state}/rooms.json";
+        };
       };
     };
   };
