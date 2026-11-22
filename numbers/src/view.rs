@@ -35,10 +35,6 @@ pub struct Playing {
     open: bool,
     revealed: bool,
     asked: u64,
-    /// For a round of red and blue buttons, the share of presses blue
-    /// has to beat, in percent. A screen shows two buttons instead of a
-    /// field for a number.
-    buttons: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -53,10 +49,6 @@ pub struct Past {
     /// played, the round being shown included once it is revealed: how
     /// the room moved, 33 → 21 → 12. Empty otherwise.
     targets: Vec<f64>,
-    /// For a round of buttons, how many pressed blue and whether that
-    /// beat the share.
-    blue: Option<usize>,
-    blue_won: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -106,7 +98,6 @@ impl Round {
             open: self.open,
             revealed: self.revealed,
             asked: self.asked,
-            buttons: self.rule.buttons(),
         }
     }
 }
@@ -151,8 +142,6 @@ fn history(game: &Game) -> Vec<Past> {
                 winners: outcome.winners.clone(),
                 n: outcome.n,
                 targets,
-                blue: outcome.blue,
-                blue_won: outcome.blue_won,
             })
         })
         .collect()
@@ -228,9 +217,6 @@ pub struct Shown {
     winners: usize,
     why: Option<String>,
     spots: Vec<Spot>,
-    /// For a round of buttons: the count, which says nothing of who.
-    blue: Option<usize>,
-    blue_won: Option<bool>,
 }
 
 /// Somebody on the top of the scoreboard. Wins and rounds, and no
@@ -286,8 +272,6 @@ pub fn wall(game: &Game) -> Wall {
                 winners: outcome.winners.len(),
                 why: outcome.why,
                 spots,
-                blue: outcome.blue,
-                blue_won: outcome.blue_won,
             }
         });
     Wall {

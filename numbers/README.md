@@ -20,11 +20,6 @@ built on [rooms](../README.md).
 | The number the most people pick | nobody wins if no two people pick the same number |
 | The number furthest from everybody else's | measured to the nearest other pick |
 | The highest number, if the total is no more than a limit | over the limit, nobody wins |
-| Red or blue button | if more than a share the host sets press blue, everybody who pressed lives; if not, only red does |
-
-the red and blue buttons are not a number on the phone but two buttons.
-whoever presses nothing is not counted, and at 50% exactly half blue is
-not enough. the wall shows the split, never who pressed what.
 
 the first one is the Keynesian beauty contest. the pages state the rules
 and nothing else: working out what to pick is the game.

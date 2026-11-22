@@ -41,9 +41,6 @@
           nearest other pick.</li>
         <li>The highest number, if everybody's numbers together come to no
           more than a limit you set. Over the limit, nobody wins.</li>
-        <li>Red or blue: everybody presses one. If more than a share you set
-          press blue, everybody lives; if not, only the ones who pressed red
-          do.</li>
       </ul>
     </div>
   </section>
@@ -78,11 +75,10 @@
     <form id="start-form">
       <label for="rule">The rule</label>
       <select id="rule"></select>
-      <div class="two" id="range-field">
+      <div class="two">
         <div><label for="low">From</label><input id="low" type="number" step="any" inputmode="decimal" value="0"></div>
         <div><label for="high">To</label><input id="high" type="number" step="any" inputmode="decimal" value="10"></div>
       </div>
-      <div id="answers-field">
       <label for="answers">Answers</label>
       <select id="answers">
         <option value="whole">Whole numbers</option>
@@ -90,12 +86,6 @@
         <option value="expression">Expressions, like 1,001/3 or 2^10</option>
       </select>
       <p class="note" id="answers-note"></p>
-      </div>
-      <div id="percent-field" hidden>
-        <label for="percent">Everybody lives if more than this share press blue, in %</label>
-        <input id="percent" type="number" min="0" max="99" step="1" inputmode="numeric" value="50">
-        <p class="note">Whoever presses nothing is not counted. At 50, half exactly is not enough.</p>
-      </div>
       <div id="limit-field" hidden>
         <label for="limit">The limit for the room's total</label>
         <input id="limit" type="number" step="any" inputmode="decimal" value="100">
@@ -134,10 +124,6 @@
         <p class="reading" id="reading" aria-live="polite"></p>
         <div class="actions send"><button class="button primary" type="submit" id="send">Send</button></div>
       </form>
-      <div class="press" id="press" hidden>
-        <button class="button red" type="button" id="press-red">Red</button>
-        <button class="button blue" type="button" id="press-blue">Blue</button>
-      </div>
       <p class="note" id="mine"></p>
     </section>
     <div id="p-outcome"></div>
