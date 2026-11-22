@@ -97,6 +97,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "buttons"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "rooms",
+ "rooms-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -511,6 +525,7 @@ name = "rooms-hall"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "buttons",
  "estimate",
  "http-body-util",
  "numbers",

@@ -5,6 +5,7 @@ members = [
   "hall",
   "petrov",
   "numbers",
+  "buttons",
   "estimate",
   "updating",
   "order",

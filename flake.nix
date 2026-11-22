@@ -51,6 +51,7 @@
       # Each game on its own server, as it ran before the hall.
       petrov = server "petrov";
       numbers = server "numbers";
+      buttons = server "buttons";
       estimate = server "estimate";
       updating = server "updating";
       order = server "order";
@@ -116,6 +117,21 @@
         }: {
           NUMBERS_ADDR = addr;
           NUMBERS_STATE = "${state}/rooms.json";
+        };
+      };
+
+      buttons = units.module {
+        name = "buttons";
+        description = "Red or blue";
+        summary = "the red or blue button game";
+        port = 8106;
+        package = build "buttons";
+        environment = {
+          addr,
+          state,
+        }: {
+          BUTTONS_ADDR = addr;
+          BUTTONS_STATE = "${state}/rooms.json";
         };
       };
 
