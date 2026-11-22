@@ -364,6 +364,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_round_of_red_and_blue_buttons_is_played_over_the_api() {
+        let (app, path) = app("buttons");
+        let (host, ada, bo) = ready(&app).await;
+        let started = ok(
+            &app,
+            "POST",
+            &format!("/api/h/{host}/start"),
+            Some(json!({"rule": "buttons", "percent": 40, "low": 0, "high": 100})),
+        )
+        .await;
+        assert_eq!(started["view"]["round"]["buttons"], 40);
+        assert_eq!(
+            started["view"]["round"]["high"], 1.0,
+            "red or blue, whatever was sent"
+        );
+        for (key, pressed) in [(&ada, 1), (&bo, 0)] {
+            ok(
+                &app,
+                "PUT",
+                &format!("/api/p/{key}/pick"),
+                Some(json!({ "value": pressed })),
+            )
+            .await;
+        }
+        let view = ok(&app, "POST", &format!("/api/h/{host}/reveal"), None).await["view"].clone();
+        assert_eq!(view["outcome"]["blue"], 1);
+        assert_eq!(view["outcome"]["blue_won"], true, "half beats 40%");
+        assert_eq!(view["outcome"]["winners"], json!(["Ada", "Bo"]));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
     async fn a_round_is_played_and_comes_out() {
         let (app, path) = app("round");
         let (host, ada, bo) = ready(&app).await;

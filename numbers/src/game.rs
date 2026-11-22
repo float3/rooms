@@ -43,7 +43,16 @@ pub enum Rule {
     /// The highest number wins, but only if everybody's numbers add up
     /// to no more than the limit. Over the limit, nobody wins.
     UnderTheLimit { limit: f64 },
+    /// Everybody presses red or blue. If more than `percent`% of those
+    /// who pressed one pressed blue, everybody who pressed one lives;
+    /// otherwise only the ones who pressed red do. Red is 0 and blue is
+    /// 1, and nobody who pressed nothing counts.
+    Buttons { percent: u32 },
 }
+
+/// The two picks under [`Rule::Buttons`].
+pub const RED: f64 = 0.0;
+pub const BLUE: f64 = 1.0;
 
 impl Rule {
     /// The rule as it is shown to the room.
@@ -65,6 +74,9 @@ impl Rule {
                     "the highest number, if everybody's numbers together come to no more than {limit}"
                 )
             }
+            Rule::Buttons { percent } => format!(
+                "red or blue: if more than {percent}% press blue, everybody lives; if not, only red does"
+            ),
         }
     }
 
@@ -73,8 +85,17 @@ impl Rule {
     pub fn whole_only(self) -> bool {
         matches!(
             self,
-            Rule::LowestUnique | Rule::HighestUnique | Rule::MostPopular
+            Rule::LowestUnique | Rule::HighestUnique | Rule::MostPopular | Rule::Buttons { .. }
         )
+    }
+
+    /// The share of blue presses that has to be beaten, for a round of
+    /// buttons.
+    pub fn buttons(self) -> Option<u32> {
+        match self {
+            Rule::Buttons { percent } => Some(percent),
+            _ => None,
+        }
     }
 
     /// Whether the rule has a number to aim at, so that how far off a
@@ -99,6 +120,10 @@ impl Rule {
                 } else {
                     Err("The limit has to be a number above nought.")
                 }
+            }
+            // At 100, blue could never be more than everybody.
+            Rule::Buttons { percent } if percent >= 100 => {
+                Err("Blue has to be able to get more than the share: pick less than 100%.")
             }
             _ => Ok(()),
         }
@@ -277,6 +302,12 @@ impl Game {
         now: u64,
     ) -> Result<(), &'static str> {
         rule.valid()?;
+        // Two buttons are a range of nought to one, whatever was sent.
+        let (answers, low, high) = if rule.buttons().is_some() {
+            (Some(Answers::Whole), RED, BLUE)
+        } else {
+            (answers, low, high)
+        };
         if rule.whole_only() && answers == Some(Answers::Decimal) {
             return Err("This rule is played with whole numbers, so it cannot take decimals.");
         }
@@ -423,6 +454,10 @@ pub struct Outcome {
     pub why: Option<String>,
     /// Every pick, lowest first.
     pub picks: Vec<Chosen>,
+    /// For a round of buttons: how many pressed blue, and whether that
+    /// was more than the share it needed.
+    pub blue: Option<usize>,
+    pub blue_won: Option<bool>,
 }
 
 impl Round {
@@ -561,6 +596,14 @@ impl Round {
                     .map(|(name, _)| *name)
                     .collect()
             }
+            Rule::Buttons { .. } => {
+                let red = !self.blue_wins(&values).unwrap_or(false);
+                named
+                    .iter()
+                    .filter(|(_, value)| !red || *value == RED)
+                    .map(|(name, _)| *name)
+                    .collect()
+            }
             Rule::LowestUnique | Rule::HighestUnique => {
                 let mut counts: HashMap<i64, usize> = HashMap::new();
                 for value in &values {
@@ -602,8 +645,21 @@ impl Round {
             | Rule::HighestUnique
             | Rule::MostPopular
             | Rule::Loneliest
-            | Rule::UnderTheLimit { .. } => None,
+            | Rule::UnderTheLimit { .. }
+            | Rule::Buttons { .. } => None,
         }
+    }
+
+    /// Whether blue got more than its share, for a round of buttons with
+    /// somebody's press in it. Counted in whole presses, so 50% of four
+    /// is two exactly and three is more.
+    fn blue_wins(&self, values: &[f64]) -> Option<bool> {
+        let percent = self.rule.buttons()?;
+        if values.is_empty() {
+            return None;
+        }
+        let blue = values.iter().filter(|value| **value == BLUE).count();
+        Some(blue * 100 > percent as usize * values.len())
     }
 
     /// Why a round with picks in it had no winner, in words.
@@ -616,6 +672,8 @@ impl Round {
                 tidy_number(limit)
             ),
             Rule::MostPopular => "No two people picked the same number.".into(),
+            // Somebody always lives: blue wins, or there was red to win.
+            Rule::Buttons { .. } => "Nobody pressed a button.".into(),
             Rule::Loneliest if values.len() < 2 => {
                 "Only one person picked, so there was nobody to be far from.".into()
             }
@@ -645,6 +703,7 @@ impl Round {
             None
         };
         let won: HashSet<&str> = winners.iter().copied().collect();
+        let blue_won = self.blue_wins(&values);
         let mut picks: Vec<Chosen> = picked
             .iter()
             .map(|(name, pick)| Chosen {
@@ -670,6 +729,11 @@ impl Round {
             winners: winners.iter().map(|name| (*name).to_string()).collect(),
             why,
             picks,
+            blue: self
+                .rule
+                .buttons()
+                .map(|_| values.iter().filter(|value| **value == BLUE).count()),
+            blue_won,
         })
     }
 }
@@ -929,6 +993,102 @@ mod tests {
         );
     }
 
+    fn buttons(percent: u32, picks: &[f64]) -> Outcome {
+        let mut game = room(Rule::Buttons { percent }, 0.0, 1.0, picks);
+        game.reveal().unwrap();
+        outcome(&game)
+    }
+
+    #[test]
+    fn more_blue_than_the_share_and_everybody_lives() {
+        let out = buttons(50, &[BLUE, BLUE, RED]);
+        assert_eq!(out.winners, vec!["Ada", "Bo", "Cy"]);
+        assert_eq!((out.blue, out.blue_won), (Some(2), Some(true)));
+        assert!(out.why.is_none());
+    }
+
+    #[test]
+    fn not_more_blue_than_the_share_and_only_red_lives() {
+        let out = buttons(50, &[BLUE, BLUE, RED, RED]);
+        assert_eq!(out.winners, vec!["Cy", "Di"], "half is not more than half");
+        assert_eq!(out.blue_won, Some(false));
+        let out = buttons(50, &[BLUE, RED, RED]);
+        assert_eq!(out.winners, vec!["Bo", "Cy"]);
+    }
+
+    #[test]
+    fn the_host_sets_the_share_blue_has_to_beat() {
+        let three_of_four = [BLUE, BLUE, BLUE, RED];
+        assert_eq!(
+            buttons(70, &three_of_four).winners.len(),
+            4,
+            "75% beats 70%"
+        );
+        assert_eq!(
+            buttons(75, &three_of_four).winners,
+            vec!["Di"],
+            "75% does not beat 75%"
+        );
+        assert_eq!(
+            buttons(0, &[BLUE, RED]).winners.len(),
+            2,
+            "one blue beats nought"
+        );
+        assert_eq!(
+            buttons(0, &[RED, RED]).winners.len(),
+            2,
+            "all red lives either way"
+        );
+    }
+
+    #[test]
+    fn whoever_pressed_nothing_is_not_counted() {
+        let mut game = room(Rule::Buttons { percent: 50 }, 0.0, 1.0, &[BLUE, RED]);
+        let cy = admit(&mut game, "Cy", None, 1000).unwrap();
+        admit(&mut game, "Di", None, 1000).unwrap();
+        // Di presses nothing: blue is 2 of 3, not 2 of 4.
+        game.pick(&cy, BLUE, 1001).unwrap();
+        game.reveal().unwrap();
+        let out = outcome(&game);
+        assert_eq!(out.n, 3);
+        assert_eq!(
+            out.winners,
+            vec!["Ada", "Bo", "Cy"],
+            "and Di is not among them"
+        );
+        assert!(game.scores().iter().all(|score| score.name != "Di"));
+    }
+
+    #[test]
+    fn buttons_are_red_or_blue_whatever_range_was_sent() {
+        let mut game = Game::new(1000);
+        let ada = admit(&mut game, "Ada", None, 1000).unwrap();
+        game.start(Rule::Buttons { percent: 50 }, 0.0, 100.0, 1000)
+            .unwrap();
+        let round = game.round().unwrap();
+        assert_eq!(
+            (round.low, round.high, round.answers()),
+            (RED, BLUE, Answers::Whole)
+        );
+        assert!(game.pick(&ada, 0.5, 1001).is_err());
+        assert!(game.pick(&ada, 2.0, 1001).is_err());
+        assert!(
+            game.start(Rule::Buttons { percent: 100 }, 0.0, 1.0, 1000)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_round_of_buttons_nobody_pressed_has_nobody_living() {
+        let mut game = Game::new(1000);
+        game.start(Rule::Buttons { percent: 50 }, 0.0, 1.0, 1000)
+            .unwrap();
+        game.reveal().unwrap();
+        let out = outcome(&game);
+        assert!(out.winners.is_empty());
+        assert_eq!((out.blue, out.blue_won), (Some(0), None));
+    }
+
     #[test]
     fn a_limit_has_to_be_a_number_above_nought() {
         let mut game = Game::new(1000);
@@ -1136,6 +1296,10 @@ mod tests {
             (Rule::UnderTheMean, "the highest number below the average"),
             (Rule::MostPopular, "the number the most people picked"),
             (Rule::Loneliest, "the number furthest from everybody else's"),
+            (
+                Rule::Buttons { percent: 50 },
+                "red or blue: if more than 50% press blue, everybody lives; if not, only red does",
+            ),
             (
                 Rule::UnderTheLimit { limit: 100.0 },
                 "the highest number, if everybody's numbers together come to no more than 100",

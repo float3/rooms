@@ -52,6 +52,9 @@ interface Playing {
   open: boolean;
   revealed: boolean;
   asked: number;
+  /** For a round of red and blue buttons, the share of presses blue has
+   *  to beat, in percent. */
+  buttons: number | null;
 }
 
 interface Chosen {
@@ -72,6 +75,10 @@ interface Outcome {
   winners: string[];
   why: string | null;
   picks: Chosen[];
+  /** For a round of buttons, how many pressed blue, and whether that beat
+   *  the share. */
+  blue: number | null;
+  blue_won: boolean | null;
 }
 
 interface Who {
@@ -101,6 +108,8 @@ interface Past {
   /** On the newest of a run of rounds with the same rule and range, the
    *  target of each, oldest first. */
   targets: number[];
+  blue: number | null;
+  blue_won: boolean | null;
 }
 
 interface HostView {
@@ -149,6 +158,8 @@ interface Shown {
   winners: number;
   why: string | null;
   spots: Spot[];
+  blue: number | null;
+  blue_won: boolean | null;
 }
 
 /** The game's part of the wall. Names only on the top of the board. */
@@ -171,6 +182,8 @@ interface Preset {
   whole?: true;
   /** Only the limit rule has one, and only it shows the field. */
   limit?: number;
+  /** Only the buttons have one: the share of presses blue has to beat. */
+  percent?: number;
   low: number;
   high: number;
 }
@@ -267,6 +280,15 @@ const RULES: Preset[] = [
     low: 0,
     high: 100,
   },
+  {
+    id: "buttons",
+    name: "Red or blue button: everybody lives if enough press blue",
+    rule: "buttons",
+    whole: true,
+    percent: 50,
+    low: 0,
+    high: 1,
+  },
 ];
 
 const chosen = (): Preset =>
@@ -295,6 +317,29 @@ const won = (score: { wins: number; solo: number }): string =>
 /** A pick as it was typed, with what it came to when that differs. */
 const typed = (text: string | null, value: number): string =>
   text === null || text === num(value) ? num(value) : `${text} = ${num(value)}`;
+
+/** A press under the buttons, said as its colour. */
+const colour = (value: number): string => (value === 1 ? "blue" : "red");
+
+/** A pick as the round would say it: a colour under the buttons, or what
+ *  was typed. */
+const said = (round: Playing, text: string | null, value: number): string =>
+  round.buttons === null ? typed(text, value) : colour(value);
+
+/** "Blue got 3 of 5, 60%, more than the 50% it needed", and the bar under it. */
+function buttonsLine(percent: number, blue: number, n: number, blueWon: boolean | null): string {
+  const got = n === 0 ? 0 : blue / n;
+  return `Blue got ${blue} of ${n}, ${share(got)}, ${
+    blueWon ? "more than" : "not more than"
+  } the ${percent}% it needed`;
+}
+
+function buttonsBar(percent: number, blue: number, n: number): string {
+  const got = n === 0 ? 0 : (blue / n) * 100;
+  return `<div class="buttons-bar"><div class="blue" style="width:${got}%"></div><div class="red"></div>
+    <div class="line" style="left:${percent}%"><span>${percent}%</span></div></div>
+    <div class="ends"><span>${blue} blue</span><span>${n - blue} red</span></div>`;
+}
 
 const ANSWERS: Record<Answers, string> = {
   whole: "whole numbers",
@@ -333,7 +378,30 @@ function strip(round: Playing, outcome: Outcome): string {
     <div class="ends"><span>${num(round.low)}</span><span>${num(round.high)}</span></div>`;
 }
 
+function buttonsOutcome(percent: number, outcome: Outcome): string {
+  const blue = outcome.blue ?? 0;
+  const verdict =
+    outcome.n === 0
+      ? `<div class="verdict none"><p class="eyebrow">Nobody pressed</p>
+         <p class="big">${esc(outcome.why ?? "Nobody pressed a button.")}</p></div>`
+      : `<div class="verdict ${outcome.blue_won ? "won" : "none"}"><p class="eyebrow">${
+          outcome.blue_won ? "Everybody lives" : "Only red lives"
+        }</p><p class="big">${esc(buttonsLine(percent, blue, outcome.n, outcome.blue_won))}</p></div>`;
+  if (outcome.n === 0) return verdict;
+  return `${verdict}${buttonsBar(percent, blue, outcome.n)}
+    <div class="scroll"><table><thead><tr><th>Who</th><th>Pressed</th></tr></thead>
+      <tbody>${[...outcome.picks]
+        .sort((a, b) => b.value - a.value)
+        .map(
+          (pick) => `<tr class="${pick.won ? "good" : ""}">
+        <td>${pick.won ? "" : "💀 "}${esc(pick.name)}</td><td><span class="colour ${colour(pick.value)}">${colour(pick.value)}</span></td>
+      </tr>`,
+        )
+        .join("")}</tbody></table></div>`;
+}
+
 function outcomeHtml(round: Playing, outcome: Outcome): string {
+  if (round.buttons !== null) return buttonsOutcome(round.buttons, outcome);
   const winners =
     outcome.winners.length > 0
       ? `<div class="verdict won"><p class="eyebrow">${outcome.winners.length === 1 ? "The winner" : "Shared between"}</p>
@@ -414,6 +482,10 @@ function host(key: string): void {
     answersNote();
     hide("limit-field", rule.limit === undefined);
     if (rule.limit !== undefined) setValue("limit", rule.limit);
+    // Two buttons have no range and nothing to type.
+    hide("percent-field", rule.percent === undefined);
+    hide("range-field", rule.percent !== undefined);
+    hide("answers-field", rule.percent !== undefined);
     if (touched) return;
     setValue("low", rule.low);
     setValue("high", rule.high);
@@ -447,6 +519,7 @@ function host(key: string): void {
       body.den = rule.den;
     }
     if (rule.limit !== undefined) body.limit = value("limit");
+    if (rule.percent !== undefined) body.percent = value("percent");
     await api("POST", at("/start"), body);
     fail("");
   });
@@ -537,7 +610,7 @@ function host(key: string): void {
         .map(
           (past) => `<div class="past">
         <span>${esc(sentence(past.label))}</span>
-        <span>${past.n === 0 ? "nobody picked" : `${past.target === null ? "" : `target ${num(past.target)} · `}average ${num(past.mean)} · ${
+        <span>${past.n === 0 ? "nobody picked" : past.blue !== null ? `${past.blue} of ${past.n} blue · ${past.blue_won ? "everybody lived" : "only red lived"}` : `${past.target === null ? "" : `target ${num(past.target)} · `}average ${num(past.mean)} · ${
           past.winners.length > 0 ? `won by ${esc(list(past.winners))}` : "nobody won"
         }`}${
           past.targets.length > 1
@@ -566,13 +639,15 @@ function host(key: string): void {
       text("h-rule", sentence(round.label));
       text(
         "h-range",
-        `${num(round.low)} to ${num(round.high)}, ${ANSWERS[round.answers]}`,
+        round.buttons === null
+          ? `${num(round.low)} to ${num(round.high)}, ${ANSWERS[round.answers]}`
+          : `Blue needs more than ${round.buttons}% of the presses. Whoever presses nothing is not counted.`,
       );
       const picked = new Set(view.players.filter((who) => who.picked).map((who) => who.id));
       text(
         "progress",
         round.revealed
-          ? `${picked.size} of ${plural(view.players.length, "person", "people")} picked`
+          ? `${picked.size} of ${plural(view.players.length, "person", "people")} ${round.buttons === null ? "picked" : "pressed"}`
           : `${waitingLine(picked, view.people)} · nobody sees a number until you reveal`,
       );
       text("close", round.open ? "Stop taking numbers" : "Take more numbers");
@@ -648,6 +723,10 @@ function player(key: string): void {
       sentState("status", null);
       return;
     }
+    if (round.buttons !== null) {
+      drawPressed(view, round);
+      return;
+    }
     const yours = view.mine === null ? "" : typed(view.mine_text, view.mine);
     const fresh = !unchanged(view);
     send.classList.toggle("done", !fresh);
@@ -673,25 +752,53 @@ function player(key: string): void {
     drawStatus();
   });
 
-  onSubmit("pick-form", async () => {
-    const r = reading();
-    if (r === null || "error" in r) {
-      fail(r?.error ?? "Pick a number first.");
-      return;
-    }
+  async function send(body: Record<string, unknown>): Promise<void> {
     sending = true;
     try {
-      const body = await api<{ view: PlayerView }>("PUT", at("/pick"), {
-        text: field.value.trim(),
-      });
-      draw(body.view);
+      const sent = await api<{ view: PlayerView }>("PUT", at("/pick"), body);
+      draw(sent.view);
       fail("");
       landed("status");
     } finally {
       sending = false;
       drawStatus();
     }
+  }
+
+  onSubmit("pick-form", async () => {
+    const r = reading();
+    if (r === null || "error" in r) {
+      fail(r?.error ?? "Pick a number first.");
+      return;
+    }
+    await send({ text: field.value.trim() });
   });
+
+  // A press sends at once: there is nothing to read back first.
+  for (const [id, pressed] of [["press-red", 0], ["press-blue", 1]] as const) {
+    onClick(id, async () => {
+      if (sending || last?.mine === pressed) return;
+      await send({ value: pressed });
+    });
+  }
+
+  /** The buttons' part of the status: which one is in. */
+  function drawPressed(view: PlayerView, round: Playing): void {
+    for (const [id, pressed] of [["press-red", 0], ["press-blue", 1]] as const) {
+      const button = byId<HTMLButtonElement>(id);
+      button.classList.toggle("chosen", view.mine === pressed);
+      button.disabled = sending;
+    }
+    const yours = view.mine === null ? "" : colour(view.mine);
+    if (!round.open) {
+      if (view.mine === null) sentState("status", "missed", "You did not press a button", "The host has stopped taking presses.");
+      else sentState("status", "locked", `🔒 Locked in: ${yours}`, "The host has stopped taking presses, so this is final. Wait for the reveal.");
+    } else if (view.mine === null) {
+      sentState("status", "waiting", "Not pressed yet", "Nobody is counted until they press one.");
+    } else {
+      sentState("status", "sent", `✓ Pressed: ${yours}`, "You can still change it until the host stops taking presses.");
+    }
+  }
 
   function draw(view: PlayerView): void {
     last = view;
@@ -703,19 +810,23 @@ function player(key: string): void {
       text("p-range", "");
       text("mine", "");
       hide("pick-form", true);
+      hide("press", true);
       hide("status", true);
       html("p-outcome", "");
       return;
     }
 
+    const buttons = round.buttons !== null;
     text(
       "p-state",
-      round.revealed ? "Revealed" : round.open ? "Pick a number" : "Closed",
+      round.revealed ? "Revealed" : round.open ? (buttons ? "Press a button" : "Pick a number") : "Closed",
     );
     text("p-rule", sentence(round.label));
     text(
       "p-range",
-      `Anything from ${num(round.low)} to ${num(round.high)}. ${
+      buttons
+        ? `Blue needs more than ${round.buttons}% of the presses. Whoever presses nothing is not counted, and nobody sees who pressed what until the reveal.`
+        : `Anything from ${num(round.low)} to ${num(round.high)}. ${
         round.answers === "whole"
           ? "Whole numbers only."
           : round.answers === "decimal"
@@ -723,7 +834,8 @@ function player(key: string): void {
             : `You can type a sum, like 1,001/3 or 2^10 - 1${round.whole ? ", as long as it comes out whole" : ""}.`
       }`,
     );
-    hide("pick-form", !round.open);
+    hide("pick-form", !round.open || buttons);
+    hide("press", !round.open || !buttons);
 
     // A phone keyboard to suit: digits for plain numbers, letters and
     // signs for sums, and a minus key whenever the range goes below nought.
@@ -739,7 +851,9 @@ function player(key: string): void {
 
     text(
       "mine",
-      round.revealed ? "" : `${view.picked} of ${plural(view.players, "person", "people")} have sent a number.`,
+      round.revealed
+        ? ""
+        : `${view.picked} of ${plural(view.players, "person", "people")} have ${buttons ? "pressed a button" : "sent a number"}.`,
     );
 
     html(
@@ -747,10 +861,14 @@ function player(key: string): void {
       view.outcome
         ? `<div class="panel">${
             view.mine === null
-              ? `<p class="you-result">You did not pick this round.</p>`
-              : view.won === true
-                ? `<p class="you-result good">🎉 You won with ${esc(typed(view.mine_text, view.mine))}</p>`
-                : `<p class="you-result">You picked ${esc(typed(view.mine_text, view.mine))}, not a winner this time.</p>`
+              ? `<p class="you-result">You did not ${buttons ? "press a button" : "pick"} this round.</p>`
+              : buttons
+                ? view.won === true
+                  ? `<p class="you-result good">You pressed ${colour(view.mine)} and lived.</p>`
+                  : `<p class="you-result">💀 You pressed ${colour(view.mine)} and did not make it.</p>`
+                : view.won === true
+                  ? `<p class="you-result good">🎉 You won with ${esc(said(round, view.mine_text, view.mine))}</p>`
+                  : `<p class="you-result">You picked ${esc(said(round, view.mine_text, view.mine))}, not a winner this time.</p>`
           }${outcomeHtml(round, view.outcome)}${
             view.score && view.score.played
               ? `<p class="note">Your evening: ${view.score.wins} of
@@ -813,12 +931,23 @@ function drawWall(game: NumbersWall | null, slot: HTMLElement, _feed: Feed, view
     );
     return;
   }
-  const state = round.revealed ? "Revealed" : round.open ? "Pick a number on your phone" : "Numbers are in";
+  const buttons = round.buttons;
+  const state = round.revealed
+    ? "Revealed"
+    : round.open
+      ? buttons === null ? "Pick a number on your phone" : "Press a button on your phone"
+      : buttons === null ? "Numbers are in" : "The presses are in";
   slot.classList.toggle("nw-revealed", round.revealed);
   const parts: Node[] = [
     el("p", { className: "eyebrow nw-state" }, state),
     el("p", { className: "nw-rule" }, sentence(round.label)),
-    el("p", { className: "nw-range" }, `${num(round.low)} to ${num(round.high)} · ${ANSWERS[round.answers]}`),
+    el(
+      "p",
+      { className: "nw-range" },
+      buttons === null
+        ? `${num(round.low)} to ${num(round.high)} · ${ANSWERS[round.answers]}`
+        : `Whoever presses nothing is not counted`,
+    ),
   ];
   if (!round.revealed) {
     parts.push(
@@ -826,13 +955,23 @@ function drawWall(game: NumbersWall | null, slot: HTMLElement, _feed: Feed, view
         "p",
         { className: "nw-count" },
         el("b", {}, `${game.picked} of ${game.players}`),
-        ` picked`,
+        buttons === null ? ` picked` : ` pressed`,
       ),
-      el("p", { className: "note nw-connected" }, `${view.connected === null ? "" : `${view.connected} of ${plural(game.players, "phone", "phones")} connected · `}nobody sees a number until the reveal`),
+      el("p", { className: "note nw-connected" }, `${view.connected === null ? "" : `${view.connected} of ${plural(game.players, "phone", "phones")} connected · `}nobody sees ${buttons === null ? "a number" : "a press"} until the reveal`),
     );
   }
   const shown = game.shown;
-  if (shown) {
+  if (shown && buttons !== null) {
+    const box = el("div", { className: "nw-shown" });
+    const blue = shown.blue ?? 0;
+    box.innerHTML =
+      shown.n === 0
+        ? `<p class="verdict none"><b>${esc(shown.why ?? "Nobody pressed a button.")}</b></p>`
+        : `<p class="verdict ${shown.blue_won ? "won" : "none"}"><b>${shown.blue_won ? "Everybody lives" : "Only red lives"}</b></p>
+          <p class="nw-range">${esc(buttonsLine(buttons, blue, shown.n, shown.blue_won))}</p>
+          ${buttonsBar(buttons, blue, shown.n)}`;
+    parts.push(box);
+  } else if (shown) {
     const verdict =
       shown.winners > 0
         ? `${plural(shown.winners, "winner", "winners")} out of ${shown.n}`
