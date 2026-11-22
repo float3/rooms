@@ -14,7 +14,7 @@ nobody has opened it for a day.
 
 the games built on it live here too, each in its own folder:
 [petrov](petrov), [estimate](estimate), [numbers](numbers),
-[updating](updating) and the food [order](order). each one still runs on
+[buttons](buttons), [updating](updating) and the food [order](order). each one still runs on
 its own server (`cargo run -p <name>`), and the flake has a package for
 each and a NixOS module for each game (`.#petrov`,
 `nixosModules.petrov`, and so on).
@@ -104,8 +104,8 @@ can use them.
 
 ## one room for every game
 
-`hall/` is a server that runs petrov, numbers, estimate, updating and
-the food order together, each under its
+`hall/` is a server that runs petrov, numbers, buttons, estimate,
+updating and the food order together, each under its
 own path, with a room of its own on top. The room has one join link and
 one QR code for the whole evening. The host picks a game; the hall opens
 a room in it, or goes back to the one it opened earlier, and joins

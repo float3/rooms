@@ -66,6 +66,7 @@ interface PlayerView {
 const ABOUT: Record<string, string> = {
   petrov: "Everyone is split evenly into two countries: one missile each, and false alarms that look real.",
   numbers: "Everyone picks a number, and a rule decides who wins.",
+  buttons: "Everyone presses red or blue. Everybody lives if enough press blue; if not, only red does.",
   estimate: "Give a range you are 90% sure of. Learn how sure you should be.",
   updating: "Pair up with whoever disagrees with you most, and talk.",
   order: "Everybody picks from the menu on their phone; you get the whole order.",
@@ -75,6 +76,7 @@ const ABOUT: Record<string, string> = {
 const NAMES: Record<string, string> = {
   petrov: "Petrov Day",
   numbers: "Number games",
+  buttons: "Red or blue",
   estimate: "Estimation",
   updating: "Speed updating",
   order: "Food order",

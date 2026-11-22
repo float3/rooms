@@ -1,0 +1,276 @@
+/* The rules specific to red or blue. The rest is rooms.css. */
+
+:root {
+  --red-button: #c0392b;
+  --blue-button: #2c6cb0;
+}
+
+#in-room {
+  margin-top: 16px;
+}
+
+#who {
+  cursor: pointer;
+  margin: 0;
+  list-style: none;
+}
+
+#who::-webkit-details-marker {
+  display: none;
+}
+
+/* Folded, a round being played is one tap from Reveal. */
+#next > summary,
+#who {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+/* The form for the next round, folded under the round being played. */
+#next > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+#next > summary::-webkit-details-marker {
+  display: none;
+}
+
+#next > summary h2 {
+  margin: 0;
+}
+
+#next > summary::after,
+#who::after {
+  content: "▸";
+  margin-left: 0.4em;
+  color: var(--body);
+}
+
+#next[open] > summary::after,
+#in-room[open] > #who::after {
+  content: "▾";
+}
+
+#next[open] > summary {
+  margin-bottom: 12px;
+}
+
+h3 {
+  margin-top: 24px;
+}
+
+#outcome:not(:empty) {
+  margin-top: 20px;
+}
+
+/* The two buttons fill the phone's width, so neither is the one in
+ * easier reach, and the one pressed stays marked. */
+.press {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.press .button {
+  min-height: 96px;
+  font-size: 1.4em;
+  font-weight: 700;
+  color: #fff;
+  border: 3px solid transparent;
+}
+
+.press .button.red {
+  background: var(--red-button);
+}
+
+.press .button.blue {
+  background: var(--blue-button);
+}
+
+.press .button.chosen {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px var(--gold);
+}
+
+.press .button.chosen::before {
+  content: "✓ ";
+}
+
+.colour {
+  font-weight: 700;
+}
+
+.colour.red {
+  color: var(--red-button);
+}
+
+.colour.blue {
+  color: var(--blue-button);
+}
+
+/* Who lived, or that nobody pressed, as the first thing the reveal says. */
+.verdict {
+  margin-top: 4px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--tint);
+  border-left: 5px solid var(--mark);
+}
+
+.verdict.won {
+  background: color-mix(in srgb, var(--gold) 22%, var(--card));
+  border-left-color: var(--gold);
+}
+
+.verdict .eyebrow {
+  margin: 0 0 2px;
+}
+
+.verdict .big {
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.35;
+}
+
+.you-result {
+  margin: 0 0 12px;
+  font-weight: 700;
+}
+
+.you-result.lived {
+  color: var(--mark);
+}
+
+tr.lived td {
+  font-weight: 700;
+}
+
+/* The share that pressed blue, against the line it had to pass. The
+ * track clips the two colours to its corners; the line and its label
+ * reach outside it. */
+.split-bar {
+  position: relative;
+  height: 28px;
+  margin-top: 28px;
+}
+
+.split-bar .track {
+  display: flex;
+  height: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.split-bar .blue {
+  background: var(--blue-button);
+}
+
+.split-bar .red {
+  flex: 1;
+  background: var(--red-button);
+}
+
+.split-bar .line {
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  width: 3px;
+  background: var(--gold);
+  transform: translateX(-50%);
+}
+
+.split-bar .line span {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.8em;
+  color: var(--body);
+  white-space: nowrap;
+}
+
+.ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--body);
+  margin-top: 6px;
+}
+
+/* On a phone the tables are squeezed to fit rather than scrolled
+ * sideways: headings wrap, and the cells give up some padding. */
+@media (max-width: 559px) {
+  table {
+    font-size: 0.85rem;
+  }
+
+  th,
+  td {
+    padding: 8px 4px;
+  }
+
+  thead th {
+    white-space: normal;
+    letter-spacing: 0.02em;
+    font-size: 0.65rem;
+    vertical-align: bottom;
+  }
+
+  td:first-child {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* ------------------------------------------------------------ the wall
+ * Read from across a room: the rule in large type, the count, and after
+ * the reveal the split. */
+
+.bw-state {
+  margin: 0;
+}
+
+.bw-rule {
+  font-size: clamp(1.6rem, min(4vw, 7vh), 3.6rem);
+  font-weight: 800;
+  line-height: 1.1;
+  margin: 4px 0 8px;
+  color: var(--ink);
+}
+
+.bw-note {
+  font-size: clamp(1.1rem, min(2.2vw, 4vh), 2rem);
+  color: var(--body);
+  margin: 0 0 12px;
+}
+
+.bw-count {
+  font-size: clamp(1.6rem, min(3.6vw, 6.4vh), 3.4rem);
+  margin: 0;
+}
+
+.bw-count b {
+  font-size: 1.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+.bw-connected {
+  font-size: clamp(0.9rem, 1.4vw, 1.2rem);
+}
+
+.bw-shown .verdict {
+  font-size: clamp(1.4rem, min(3.2vw, 5.6vh), 3rem);
+  margin: 4px 0 12px;
+  padding: 8px 14px;
+}
+
+.bw-shown .split-bar {
+  height: clamp(28px, 6vh, 64px);
+  margin-top: 44px;
+}
+
+.bw-shown .ends {
+  font-size: clamp(0.9rem, min(1.8vw, 3.2vh), 1.6rem);
+}

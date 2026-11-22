@@ -119,7 +119,7 @@ jobs:
       fail-fast: false
       matrix:
         # default is the two libraries; the rest are the servers.
-        package: [default, hall, petrov, numbers, estimate, updating, order]
+        package: [default, hall, petrov, numbers, buttons, estimate, updating, order]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -153,6 +153,7 @@ jobs:
                   flake.nixosModules.hall
                   flake.nixosModules.petrov
                   flake.nixosModules.numbers
+                  flake.nixosModules.buttons
                   flake.nixosModules.estimate
                   flake.nixosModules.updating
                   flake.nixosModules.order
@@ -168,6 +169,7 @@ jobs:
                       arkhipov = { brand = "arkhipov"; port = 8096; domains = ["arkhipov.example.com"]; };
                     };
                     services.numbers = { enable = true; domains = ["numbers.example.com"]; };
+                    services.buttons = { enable = true; domains = ["buttons.example.com"]; };
                     services.estimate = { enable = true; domains = ["estimate.example.com"]; };
                     services.updating = { enable = true; domains = ["updating.example.com"]; };
                     services.order = { enable = true; port = 8105; domains = ["order.example.com"]; };

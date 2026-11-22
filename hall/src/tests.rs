@@ -95,7 +95,7 @@ async fn the_host_picks_a_game_and_everybody_is_in_it() {
         !view.to_string().contains(&ada),
         "no player keys for the host"
     );
-    assert_eq!(view["games"].as_array().unwrap().len(), 5);
+    assert_eq!(view["games"].as_array().unwrap().len(), 6);
 
     let view = ok(
         &app,
@@ -601,7 +601,9 @@ async fn a_game_this_server_does_not_play_is_refused() {
 #[tokio::test]
 async fn every_game_is_served_under_its_own_path_with_its_links_moved_there() {
     let app = server("paths");
-    for game in ["petrov", "numbers", "estimate", "updating", "order"] {
+    for game in [
+        "petrov", "numbers", "buttons", "estimate", "updating", "order",
+    ] {
         let response = app
             .clone()
             .oneshot(

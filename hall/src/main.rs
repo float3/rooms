@@ -2,8 +2,8 @@
 //! the host picks.
 //!
 //! Every game is served from this one server under its own path,
-//! `/petrov`, `/numbers`, `/estimate`, `/updating` and `/order`, exactly as
-//! it would be on its own. The hall keeps the people and the one QR code. When the host picks
+//! `/petrov`, `/numbers`, `/buttons`, `/estimate`, `/updating` and `/order`,
+//! exactly as it would be on its own. The hall keeps the people and the one QR code. When the host picks
 //! a game, the hall opens a room in it (or goes back to the one it opened
 //! earlier) and joins everybody into it by name. Phones show the game in a
 //! frame, and the frame moves when the host moves the room.
@@ -395,6 +395,7 @@ fn games(dir: &std::path::Path) -> (Router, Vec<Arc<dyn Tool>>) {
     )
     .expect("the petrov brand exists");
     let numbers = numbers::load(dir.join("numbers.json"));
+    let buttons = buttons::load(dir.join("buttons.json"));
     let estimate = estimate::load(dir.join("estimate.json"));
     let updating = updating::load(dir.join("updating.json"));
     let order = order::load(dir.join("order.json"));
@@ -403,6 +404,10 @@ fn games(dir: &std::path::Path) -> (Router, Vec<Arc<dyn Tool>>) {
         .nest(
             "/numbers",
             numbers::router_under(numbers.clone(), "/numbers"),
+        )
+        .nest(
+            "/buttons",
+            buttons::router_under(buttons.clone(), "/buttons"),
         )
         .nest(
             "/estimate",
@@ -417,6 +422,7 @@ fn games(dir: &std::path::Path) -> (Router, Vec<Arc<dyn Tool>>) {
         Arc::new(petrov),
         // On the lobby, so the hall follows each game's `HasLobby::on_wall`.
         Arc::new(Mount::with_lobby("numbers", "Number games", numbers)),
+        Arc::new(Mount::with_lobby("buttons", "Red or blue", buttons)),
         Arc::new(Mount::with_lobby("estimate", "Estimation", estimate)),
         Arc::new(Mount::with_lobby("updating", "Speed updating", updating)),
         Arc::new(Mount::with_lobby("order", "Food order", order)),
